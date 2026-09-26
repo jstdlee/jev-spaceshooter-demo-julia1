@@ -44,19 +44,8 @@ test('strategy runner sends backend-valid event metadata for every decision befo
   const calls = [];
   const events = [];
   const decisions = [];
-  const validator = [
-    'import json, sys',
-    'import space_shooter_server as server',
-    'body = json.loads(sys.argv[1])',
-    'try:',
-    '    server._require_schema(body)',
-    '    for event in body["events"]:',
-    '        server._validate_event(event)',
-    'except server.ApiError as exc:',
-    '    print(json.dumps({"ok": False, "error": str(exc)}))',
-    'else:',
-    '    print(json.dumps({"ok": True}))',
-  ].join('\n');
+  // The Go bridge exposes its real event validator as a subcommand.
+  const goBin = process.env.GO || 'go';
 
   t.mock.method(globalThis, 'fetch', async (url, options) => {
     const route = new URL(url).pathname;
@@ -76,9 +65,9 @@ test('strategy runner sends backend-valid event metadata for every decision befo
         confidence: { intent: 0.9, path: 0.9, movement: 0.9, fire: 0.9, lease: 0.9 },
       };
     } else if (route === '/api/run/event') {
-      // Exercise the Python bridge's complete event validator without contacting a model or service.
-      const { stdout } = await promisify(execFile)('python3', ['-B', '-c', validator, JSON.stringify(body)], {
-        cwd: __dirname, encoding: 'utf8', timeout: 5000,
+      // Exercise the Go bridge's complete event validator without contacting a model or service.
+      const { stdout } = await promisify(execFile)(goBin, ['run', './bridge', 'validate-events', JSON.stringify(body)], {
+        cwd: __dirname, encoding: 'utf8', timeout: 120000,
       });
       const checked = JSON.parse(stdout);
       if (!checked.ok) return new Response(JSON.stringify(checked), { status: 400 });

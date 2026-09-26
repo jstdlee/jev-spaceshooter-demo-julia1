@@ -1,0 +1,194 @@
+// Command bridge serves the space shooter page and relays structured decisions to Djev.
+//
+//	go run ./demo/bridge --host 127.0.0.1 --port 7865
+//	go run ./demo/bridge validate-events '<event batch JSON>'
+package main
+
+import (
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"log"
+	"net"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+)
+
+const maxBodyBytes = 4 * 1024 * 1024
+
+// loadEnvFile sets keys from a .env file without overriding the process environment.
+func loadEnvFile(path string) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") || !strings.Contains(line, "=") {
+			continue
+		}
+		key, value, _ := strings.Cut(line, "=")
+		key = strings.TrimSpace(key)
+		if _, exists := os.LookupEnv(key); !exists {
+			os.Setenv(key, strings.TrimSpace(value))
+		}
+	}
+}
+
+func envOr(key, fallback string) string {
+	if value, ok := os.LookupEnv(key); ok {
+		return value
+	}
+	return fallback
+}
+
+// findDemoDir accepts running from the repository root or from demo/.
+func findDemoDir() string {
+	for _, candidate := range []string{"demo", "."} {
+		if _, err := os.Stat(filepath.Join(candidate, "space-shooter.html")); err == nil {
+			return candidate
+		}
+	}
+	if exe, err := os.Executable(); err == nil {
+		return filepath.Dir(filepath.Dir(exe))
+	}
+	return "demo"
+}
+
+func writeJSON(w http.ResponseWriter, status int, value any) {
+	body, err := marshalCompact(value)
+	if err != nil {
+		status = http.StatusInternalServerError
+		body = []byte(`{"schema_version":1,"error":"response encoding failed","code":"internal_error"}`)
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.WriteHeader(status)
+	w.Write(body)
+}
+
+func writeError(w http.ResponseWriter, err error) {
+	var apiErr *ApiError
+	if errors.As(err, &apiErr) {
+		writeJSON(w, apiErr.Status, map[string]any{"schema_version": SchemaVersion, "error": apiErr.Message, "code": apiErr.Code})
+		return
+	}
+	writeJSON(w, http.StatusInternalServerError, map[string]any{"schema_version": SchemaVersion, "error": err.Error(), "code": "internal_error"})
+}
+
+func readJSON(r *http.Request) (any, error) {
+	raw, err := io.ReadAll(io.LimitReader(r.Body, maxBodyBytes+1))
+	if err != nil {
+		return nil, validationError("could not read request body")
+	}
+	if len(raw) == 0 {
+		return nil, validationError("request body is required")
+	}
+	if len(raw) > maxBodyBytes {
+		return nil, validationError("request body is too large")
+	}
+	value, err := decodeJSON(raw)
+	if err != nil {
+		return nil, validationError("invalid JSON: %v", err)
+	}
+	return value, nil
+}
+
+func (s *Server) Handler() http.Handler {
+	routes := map[string]func(*http.Request, any) (map[string]any, error){
+		"/api/run/start": func(_ *http.Request, body any) (map[string]any, error) { return s.StartRun(body) },
+		"/api/decision":  func(r *http.Request, body any) (map[string]any, error) { return s.HandleDecision(r.Context(), body) },
+		"/api/run/event": func(_ *http.Request, body any) (map[string]any, error) { return s.RecordRunEvents(body) },
+		"/api/run/end":   func(_ *http.Request, body any) (map[string]any, error) { return s.EndRun(body) },
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodOptions:
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+			w.WriteHeader(http.StatusNoContent)
+		case http.MethodGet:
+			switch r.URL.Path {
+			case "/", "/space-shooter.html":
+				page, err := os.ReadFile(s.cfg.HTMLPath)
+				if err != nil {
+					writeError(w, err)
+					return
+				}
+				w.Header().Set("Content-Type", "text/html; charset=utf-8")
+				w.Header().Set("Cache-Control", "no-store")
+				w.Header().Set("Access-Control-Allow-Origin", "*")
+				w.Write(page)
+			case "/health":
+				w.Header().Set("Content-Type", "application/json")
+				w.Write([]byte(`{"ok":true}`))
+			default:
+				writeJSON(w, http.StatusNotFound, map[string]any{"schema_version": SchemaVersion, "error": "not found"})
+			}
+		case http.MethodPost:
+			handler, ok := routes[r.URL.Path]
+			if !ok {
+				writeJSON(w, http.StatusNotFound, map[string]any{"schema_version": SchemaVersion, "error": "not found"})
+				return
+			}
+			body, err := readJSON(r)
+			if err == nil {
+				var result map[string]any
+				if result, err = handler(r, body); err == nil {
+					writeJSON(w, http.StatusOK, result)
+					return
+				}
+			}
+			writeError(w, err)
+		default:
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"schema_version": SchemaVersion, "error": "method not allowed"})
+		}
+	})
+}
+
+// validateEventsCommand lets the JS strategy harness check event batches against the real validator.
+func validateEventsCommand(raw string) int {
+	body, err := decodeJSON([]byte(raw))
+	if err == nil {
+		_, err = ValidateEventBatch(body)
+	}
+	out := map[string]any{"ok": err == nil}
+	if err != nil {
+		out["error"] = err.Error()
+	}
+	encoded, _ := marshalCompact(out)
+	fmt.Println(string(encoded))
+	return 0
+}
+
+func main() {
+	if len(os.Args) == 3 && os.Args[1] == "validate-events" {
+		os.Exit(validateEventsCommand(os.Args[2]))
+	}
+	demoDir := flag.String("demo-dir", findDemoDir(), "directory containing space-shooter.html and strategy.md")
+	host := flag.String("host", envOr("SHOOTER_HOST", "127.0.0.1"), "listen host")
+	port := flag.Int("port", func() int { p, _ := strconv.Atoi(envOr("SHOOTER_PORT", "7862")); return p }(), "listen port")
+	flag.Parse()
+
+	loadEnvFile(filepath.Join(*demoDir, "..", ".env"))
+	djevURL := strings.TrimRight(envOr("DJEV_URL", "http://127.0.0.1:8011"), "/")
+	apiKey := envOr("DJEV_API_KEY", os.Getenv("API_KEY"))
+	cfg := Config{
+		HTMLPath:     filepath.Join(*demoDir, "space-shooter.html"),
+		StrategyPath: filepath.Join(*demoDir, "strategy.md"),
+		RunsDir:      filepath.Join(*demoDir, "runs"),
+		DjevURL:      djevURL,
+		DjevModel:    envOr("DJEV_MODEL", "jev-latest"),
+	}
+	server := NewServer(cfg, newHTTPUpstream(djevURL, apiKey))
+	address := net.JoinHostPort(*host, strconv.Itoa(*port))
+	fmt.Printf("Space shooter: http://%s/\n", address)
+	log.Fatal(http.ListenAndServe(address, server.Handler()))
+}

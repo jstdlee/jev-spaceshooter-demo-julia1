@@ -23,9 +23,9 @@ The inline animation is an 8-second, real-time excerpt; the original video is ap
 ### Dependencies
 
 - A modern browser for the HTML/Canvas game. No Gradio, React, npm install, or frontend build is needed.
-- Python **3.10+** for the HTTP bridge, using only the standard library.
+- Go **1.22+** for the HTTP bridge, using only the standard library.
 - A running **djev-spark structured API** at `POST /v1/systemone`.
-- Node.js **22** for the tested offline suites and optional CLI benchmarks; not needed just to open the game through the Python bridge.
+- Node.js **22** for the tested offline suites and optional CLI benchmarks; not needed just to open the game through the bridge.
 
 The development endpoint used DiffusionGemma 26B-A4B NVFP4 through djev-spark and its patched vLLM runtime. Model weights, GPU resources, containers, and their dependencies are **not bundled here**. Follow the upstream [djev-spark setup](https://github.com/mmastrac/djev-spark) for the model-serving environment and its licenses. A generic `/v1/chat/completions` endpoint is not a drop-in replacement.
 
@@ -48,12 +48,12 @@ DJEV_MODEL=jev-latest
 `jev-latest` is the bridge's default compatibility identifier, **not a claim that an official Jev model is running**. Configure the identifier accepted by your own server. Set a bearer key only if the endpoint requires one. Process environment variables override `.env`; `.env` is ignored by Git.
 
 ```bash
-python3 demo/space_shooter_server.py --host 127.0.0.1 --port 7865
+go run ./demo/bridge --host 127.0.0.1 --port 7865
 ```
 
-Open **[http://127.0.0.1:7865/](http://127.0.0.1:7865/)**. Watch both *valid djev commands* and *applied djev commands* increase. Opening the HTML with `file://` does not provide the Python API bridge. A green `/health` response checks the bridge only, not successful model inference.
+Open **[http://127.0.0.1:7865/](http://127.0.0.1:7865/)**. Watch both *valid djev commands* and *applied djev commands* increase. Opening the HTML with `file://` does not provide the API bridge. Run the command from the repository root (or pass `--demo-dir`). A green `/health` response checks the bridge only, not successful model inference.
 
-Keep the bridge on loopback for this local demo. The browser never needs the upstream API key. GitHub hosts the source and media, not a running model or Python backend.
+Keep the bridge on loopback for this local demo. The browser never needs the upstream API key. GitHub hosts the source and media, not a running model or bridge backend.
 
 ## Who decides what?
 
@@ -61,7 +61,7 @@ Keep the bridge on loopback for this local demo. The browser never needs the ups
 HTML game: positions, velocities, all nine physical path forecasts
     │ POST /api/decision
     ▼
-Python bridge: validate and compact the observations
+Go bridge: validate and compact the observations
     │ POST /v1/systemone — one request, three choices
     ▼
 Self-hosted djev-spark → local model
@@ -74,7 +74,7 @@ Bridge normalization → client validity/freshness checks → game physics
 | Component | Responsibility | Does not do |
 | --- | --- | --- |
 | HTML client | Render and simulate the game; observe positions/velocities; forecast each candidate path; execute accepted commands | Rank or filter tactical actions, veto a valid but dangerous direction, or supply fallback steering |
-| Python bridge | Validate schemas, compact factual inputs, call djev, normalize the three answers, keep credentials server-side | Choose a winner, synthesize a movement answer, or replace an unsafe answer |
+| Go bridge | Validate schemas, compact factual inputs, call djev, normalize the three answers, keep credentials server-side | Choose a winner, synthesize a movement answer, or replace an unsafe answer |
 | Local djev model | Choose intent, one of nine paths, and shooting state | Run the game physics or inspect future random spawns |
 | Protocol controller | Check run/epoch/sequence, response age, and command expiry | Decide which direction is tactically safer |
 
@@ -106,7 +106,7 @@ For example, the answer fields may be:
 
 The bridge maps `up_right__medium` to `movement: "up_right"` and `lease: "medium"`. All three choices must validate together. Intent is descriptive: a `recover` label does not activate a hidden client-side return-to-center routine. It can disagree with the quality of the selected movement.
 
-Physics runs at 60 ticks/s. Each medium command authorizes at most **30 ticks / 500 ms**, and a newer valid answer can preempt it on the next tick. One request is pending per game; the next request starts after the previous one completes. Thus 500 ms is an authorization ceiling, not a mandatory wait between decisions. The current response-age limit is 600 ms. Keeping one request in flight is deliberate: in a deterministic lockstep simulation, overlapping requests (sending again before the previous answer lands) cut survival from ~90 s to ~25 s because each forecast assumes a command that is about to be replaced, and voting across three parallel `samples: 1` calls did not improve choices. Survival tracks latency instead: live hardest-profile runs at ~180 ms reached 88–121 s, while runs at ~300 ms died at 21–50 s.
+Physics runs at 60 ticks/s. Each medium command authorizes at most **30 ticks / 500 ms**, and a newer valid answer can preempt it on the next tick. One request is pending per game; the next request starts after the previous one completes. Thus 500 ms is an authorization ceiling, not a mandatory wait between decisions. The current response-age limit is 600 ms. Measured on the development GPU, Djev answers a distinct game state in about 185 ms (repeated identical payloads return in ~120 ms from its cache, which is why naive micro-benchmarks look faster); the bridge adds about 1 ms and the client about 25 ms, mostly waiting for the next 60 Hz tick. Keeping one request in flight is deliberate: in a deterministic lockstep simulation, overlapping requests (sending again before the previous answer lands) cut survival from ~90 s to ~25 s because each forecast assumes a command that is about to be replaced, and voting across three parallel `samples: 1` calls did not improve choices. Survival tracks latency instead: live hardest-profile runs at ~180 ms reached 88–121 s, while runs at ~300 ms died at 21–50 s.
 
 ## Current decision model
 
@@ -145,7 +145,7 @@ The current fire question asks the model to shoot when enemies exist; it is not 
 2. Within that tier: more escapes, then not stationary or reversing, then not near an enemy ship, then open space, then toward center. Center is a way to gain space, not a place to hold.
 3. If every move is DEADLY, pick the latest predicted contact. This only buys time.
 
-These are **model instructions**, not conditional steering code in the game. The model can fail to follow them. The shared framing is in [strategy.md](demo/strategy.md); factual option construction and question-specific instructions are in [space_shooter_server.py](demo/space_shooter_server.py), especially `_path_table`, `build_path_criteria`, `pack_model_context`, and `build_upstream_payload`.
+These are **model instructions**, not conditional steering code in the game. The model can fail to follow them. The shared framing is in [strategy.md](demo/strategy.md); factual option construction and question-specific instructions are in [decision.go](demo/bridge/decision.go), especially `pathTable`, `pathLabel`, `packModelContext`, and `buildUpstreamPayload`.
 
 ## Difficulty: why “just dodge” is not enough
 
@@ -210,10 +210,10 @@ Offline tests require no running model:
 node demo/test_space_shooter_logic.cjs
 node demo/test_benchmark.cjs
 node demo/test_strategy_regression.cjs
-python3 -B -m unittest discover -s demo -p 'test_space_shooter.py' -v
+go test ./demo/bridge/
 ```
 
-The publication check covers 35 core/controller/UI cases, 49 benchmark cases, 10 scenario-harness cases, and 24 Python bridge cases: **118 tests**. These validate software behavior, not tactical quality.
+The publication check covers 45 core/controller/UI cases, 47 benchmark cases, 10 scenario-harness cases, and 24 Go bridge cases: **126 tests**. The scenario harness runs the bridge's event validator through `go run`, so Go must be on `PATH` (or set `GO`). These validate software behavior, not tactical quality.
 
 With the bridge and model running, pause other model-controlled games before a bounded live test:
 

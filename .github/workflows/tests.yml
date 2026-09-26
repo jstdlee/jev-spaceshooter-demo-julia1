@@ -15,15 +15,13 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-go@v5
         with:
-          python-version: "3.12"
+          go-version-file: go.mod
       - name: Node behavioral tests
         run: |
           node demo/test_space_shooter_logic.cjs
           node demo/test_benchmark.cjs
           node demo/test_strategy_regression.cjs
-      - name: Python bridge tests
-        env:
-          PYTHONDONTWRITEBYTECODE: "1"
-        run: python3 -B -m unittest discover -s demo -p 'test_space_shooter.py' -v
+      - name: Go bridge tests
+        run: go test ./demo/bridge/
