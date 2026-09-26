@@ -90,7 +90,7 @@ function assertFunction(obj, name, owner) {
 }
 
 function validateRuntimeContract(core, controller) {
-  for (const name of ['createGame', 'stepGame', 'observeGame', 'serializeGame', 'restoreGame', 'hashGame', 'gameStatus']) {
+  for (const name of ['createGame', 'stepGame', 'coordinateAction', 'stepPolicyTick', 'observeGame', 'serializeGame', 'restoreGame', 'hashGame', 'gameStatus']) {
     assertFunction(core, name, 'SpaceDecisionCore');
   }
   for (const name of ['createController', 'beginDecision', 'receiveDecision', 'commandForTick', 'finishDecision', 'invalidateController']) {
@@ -161,7 +161,7 @@ async function archiveEngineHtmlSnapshot({ outDir, engineHash, html }) {
   }
 }
 
-function buildManifest({ seed, profile, difficulty, engineHash, engineVersion, mode = 'cli', rules = DEFAULT_RULES }) {
+function buildManifest({ seed, profile, difficulty, engineHash, engineVersion, mode = 'cli', policyMode = 'hybrid', rules = DEFAULT_RULES }) {
   const manifestRules = rules == null ? cloneJson(DEFAULT_RULES) : cloneJson(rules);
   return {
     seed,
@@ -173,6 +173,7 @@ function buildManifest({ seed, profile, difficulty, engineHash, engineVersion, m
     prompt_version: PROMPT_VERSION,
     context_version: CONTEXT_VERSION,
     mode,
+    policy_mode: policyMode,
     rules: manifestRules,
     rng: {
       algorithm: 'engine-seeded-authoritative',
@@ -1197,6 +1198,7 @@ async function runLiveBenchmark(options) {
     engineHash,
     engineVersion: core.ENGINE_VERSION,
     mode: 'cli',
+    policyMode: options.policyMode || 'hybrid',
     rules: core.RULES,
   });
   const postJson = options.postJson || ((route, body, timeoutMs) => httpPostJson(options.url, route, body, timeoutMs));
@@ -1467,7 +1469,7 @@ async function runLiveBenchmark(options) {
       enqueueControllerEvents(controllerResult?.events || [], { epoch: currentEpoch, sequence: controllerResult?.command?.sequence ?? null, tick, sim_ms: tick * DT_MS, wall_ms: wallMs });
       const command = controllerResult?.command || null;
       updateCommandSpans(command, tick, wallMs);
-      const step = core.stepGame(game, command);
+      const step = core.stepPolicyTick(game, command);
       const movement = collectDisplacement(step?.events || []);
       if (currentCommandSpan) {
         currentCommandSpan.displacement.dx += movement.dx;

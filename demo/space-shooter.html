@@ -132,7 +132,7 @@
   (() => {
     "use strict";
 
-    const ENGINE_VERSION = "space-decision-core-v2";
+    const ENGINE_VERSION = "space-decision-core-v3";
     const DT_MS = 1000 / 60;
     const DT_SECONDS = 1 / 60;
     const WIDTH = 960;
@@ -167,6 +167,7 @@
       weapon:{ cooldown_s:PLAYER_COOLDOWN_S, shot_vy:PLAYER_SHOT_SPEED, shot_box:PLAYER_SHOT_BOX, muzzle_y:PLAYER_MUZZLE_Y },
       hostile_box:HOSTILE_BOX,
       enemy_fire_interval:{ baseline_s:.95, min_s:.18 },
+      coordinator:{ emergency_horizon_ms:250, safety_margin_px:SAFETY_MARGIN_PX },
       leases_ticks:LEASE_TICKS,
       action_ids:ACTION_IDS,
       fire_ids:FIRE_IDS,
@@ -303,6 +304,7 @@
         tick: 0,
         sim_ms: 0,
         seed,
+        policy_mode: manifest.policy_mode === "djev-only" ? "djev-only" : "hybrid",
         rng: { algorithm: PRNG_VERSION, state: seed },
         difficulty: normalizeDifficulty(manifest.difficulty || (manifest.profile === "hardest" ? HARDEST_DIFFICULTY : DEFAULT_DIFFICULTY)),
         wave: 1,
@@ -329,6 +331,7 @@
           invulnerabilityContacts: 0,
           enemiesDestroyed: 0,
           wavesStarted: 0,
+          safetyOverrides: 0,
         },
       };
       startWave(game);
@@ -849,7 +852,7 @@
       game.player.y = moved.y;
       const displacement = { dx:game.player.x - beforePlayer.x, dy:game.player.y - beforePlayer.y, clamped:moved.wall_clamped };
       if (command && (displacement.dx !== 0 || displacement.dy !== 0 || moved.wall_clamped)) {
-        events.push({ type:"movement", tick:game.tick, decision_id:command.decision_id, sequence:command.sequence, movement, dx:displacement.dx, dy:displacement.dy, clamped:moved.wall_clamped });
+        events.push({ type:"movement", tick:game.tick, decision_id:command.decision_id, sequence:command.sequence, movement, model_movement:command.model_movement ?? movement, source:command.source || "djev", dx:displacement.dx, dy:displacement.dy, clamped:moved.wall_clamped });
       }
       game.player.cooldown_s -= DT_SECONDS;
       if (fire === "shoot" && game.player.cooldown_s <= 0 && command) emitPlayerShot(game, command, events);
@@ -915,6 +918,164 @@
       return { events };
     }
 
+    function assessRoute(game, movement, threats, horizonMs) {
+      const arena = arenaFor(game);
+      const segments = [];
+      const end = appendMotionSegments(segments, { x:game.player.x, y:game.player.y }, movement, 0, horizonMs, arena);
+      const vulnerableStartMs = Math.max(0, finite(game.player.invincible_s, 0) * 1000);
+      const vulnerableSegments = segmentsInWindow(segments, vulnerableStartMs, horizonMs);
+      let contactMs = null;
+      let projectileContactMs = null;
+      let bodyContactMs = null;
+      let minClearance = threats.length ? Number.POSITIVE_INFINITY : null;
+
+      for (const threat of threats) {
+        const actualHalf = { x:PLAYER_W / 2 + threat.w / 2, y:PLAYER_H / 2 + threat.h / 2 };
+        const paddedHalf = { x:actualHalf.x + SAFETY_MARGIN_PX, y:actualHalf.y + SAFETY_MARGIN_PX };
+        for (const segment of segments) {
+          const clearance = segmentClearance(segment, threat, paddedHalf);
+          if (minClearance === null || clearance < minClearance) minClearance = clearance;
+        }
+        for (const segment of vulnerableSegments) {
+          const contact = sweptContact(segment, threat, actualHalf);
+          if (contact === null) continue;
+          const contactInMs = Math.max(0, contact * 1000);
+          if (contactMs === null || contactInMs < contactMs) contactMs = contactInMs;
+          if (threat.kind === "bullet" && (projectileContactMs === null || contactInMs < projectileContactMs)) projectileContactMs = contactInMs;
+          if (threat.kind === "enemy" && (bodyContactMs === null || contactInMs < bodyContactMs)) bodyContactMs = contactInMs;
+        }
+      }
+
+      const edge = edgeDistances(end, arena);
+      return {
+        id:movement,
+        safe:contactMs === null,
+        contact_ms:contactMs === null ? null : rounded(contactMs, 3),
+        projectile_contact_ms:projectileContactMs === null ? null : rounded(projectileContactMs, 3),
+        body_contact_ms:bodyContactMs === null ? null : rounded(bodyContactMs, 3),
+        clearance_px:minClearance === null ? null : rounded(minClearance, 3),
+        wall_room_px:rounded(Math.min(edge.left, edge.right, edge.top, edge.bottom), 3),
+      };
+    }
+
+    function rankRouteOptions(candidates, preferSafe) {
+      const eligible = candidates.filter((candidate) => !preferSafe || candidate.safe);
+      if (!eligible.length) return null;
+      const clearance = (candidate) => candidate.clearance_px == null ? Number.NEGATIVE_INFINITY : candidate.clearance_px;
+      const wallRoom = (candidate) => candidate.wall_room_px == null ? Number.NEGATIVE_INFINITY : candidate.wall_room_px;
+      return eligible.slice().sort((a, b) => {
+        if (!preferSafe && a.contact_ms !== b.contact_ms) return (b.contact_ms ?? Number.NEGATIVE_INFINITY) - (a.contact_ms ?? Number.NEGATIVE_INFINITY);
+        if (clearance(a) !== clearance(b)) return clearance(b) - clearance(a);
+        if (wallRoom(a) !== wallRoom(b)) return wallRoom(b) - wallRoom(a);
+        return ACTION_IDS.indexOf(a.id) - ACTION_IDS.indexOf(b.id);
+      })[0];
+    }
+
+    function assessAllRoutes(game) {
+      if (!Number.isFinite(game.player.x) || !Number.isFinite(game.player.y) || !Number.isFinite(game.player.invincible_s)) {
+        throw new Error("player position or invulnerability is not finite");
+      }
+      const threats = hostileThreats(game);
+      for (const threat of threats) {
+        for (const key of ["x", "y", "vx", "vy", "w", "h"]) {
+          if (!Number.isFinite(threat[key])) throw new Error(`threat ${threat.id} has invalid ${key}`);
+        }
+      }
+      const assessments = ACTION_IDS.map((movement) => assessRoute(game, movement, threats, 250));
+      if (assessments.some((candidate) => !Number.isFinite(candidate.wall_room_px) || candidate.contact_ms !== null && !Number.isFinite(candidate.contact_ms))) {
+        throw new Error("route assessment produced non-finite results");
+      }
+      return assessments;
+    }
+
+    function coordinateAction(game, proposal) {
+      const authorizedProposal = proposal && ACTION_IDS.includes(proposal.movement) ? { ...proposal } : null;
+      let assessments;
+      try {
+        assessments = assessAllRoutes(game);
+      } catch (error) {
+        return {
+          effective_command:authorizedProposal,
+          use_bomb:false,
+          events:[{ type:"safety_calculation_failed", tick:game.tick, decision_id:authorizedProposal?.decision_id ?? null, reason:String(error.message || error) }],
+        };
+      }
+
+      const routeById = new Map(assessments.map((candidate) => [candidate.id, candidate]));
+      const holdRoute = routeById.get("hold");
+      const proposedMovement = authorizedProposal?.movement ?? "hold";
+      const proposedRoute = routeById.get(proposedMovement);
+      const shouldRescueNeutral = !authorizedProposal && !holdRoute.safe;
+      if (authorizedProposal && proposedRoute.safe || !authorizedProposal && !shouldRescueNeutral) {
+        return { effective_command:authorizedProposal, use_bomb:false, events:[] };
+      }
+
+      const safeRouteAvailable = assessments.some((candidate) => candidate.safe);
+      const selectedRoute = rankRouteOptions(assessments, safeRouteAvailable);
+      if (!selectedRoute) {
+        return {
+          effective_command:authorizedProposal,
+          use_bomb:false,
+          events:[{ type:"safety_calculation_failed", tick:game.tick, decision_id:authorizedProposal?.decision_id ?? null, reason:"no_route_assessment" }],
+        };
+      }
+
+      const baselineMovement = proposedMovement;
+      const movementChanged = selectedRoute.id !== baselineMovement;
+      const effectiveCommand = authorizedProposal
+        ? movementChanged ? { ...authorizedProposal, movement:selectedRoute.id, model_movement:authorizedProposal.movement, source:"local_safety" } : authorizedProposal
+        : {
+          decision_id:null,
+          sequence:null,
+          movement:selectedRoute.id,
+          fire:"cease",
+          lease:null,
+          intent:null,
+          model_movement:null,
+          source:"local_safety",
+        };
+      const events = [];
+      if (movementChanged) {
+        game.counters.safetyOverrides += 1;
+        events.push({
+          type:"safety_override",
+          tick:game.tick,
+          decision_id:authorizedProposal?.decision_id ?? null,
+          sequence:authorizedProposal?.sequence ?? null,
+          proposed_movement:baselineMovement,
+          effective_movement:selectedRoute.id,
+          safe_route_available:safeRouteAvailable,
+          candidate_assessments:assessments,
+        });
+      }
+      if (!safeRouteAvailable) {
+        events.push({
+          type:"safety_escape_unavailable",
+          tick:game.tick,
+          decision_id:authorizedProposal?.decision_id ?? null,
+          sequence:authorizedProposal?.sequence ?? null,
+          selected_movement:selectedRoute.id,
+          safe_route_available:false,
+          candidate_assessments:assessments,
+        });
+      }
+      return { effective_command:effectiveCommand, use_bomb:false, events };
+    }
+
+    function stepPolicyTick(game, modelProposal) {
+      if (game.policy_mode === "djev-only") {
+        const stepped = stepGame(game, modelProposal);
+        return { model_proposal:modelProposal ? clone(modelProposal) : null, effective_command:modelProposal ? clone(modelProposal) : null, events:stepped.events };
+      }
+      const coordinated = coordinateAction(game, modelProposal);
+      const stepped = stepGame(game, coordinated.effective_command);
+      return {
+        model_proposal:modelProposal ? clone(modelProposal) : null,
+        effective_command:coordinated.effective_command ? clone(coordinated.effective_command) : null,
+        events:[...coordinated.events, ...stepped.events],
+      };
+    }
+
     function serializeGame(game) {
       return clone({
         schema_version: game.schema_version,
@@ -924,6 +1085,7 @@
         tick: game.tick,
         sim_ms: game.sim_ms,
         seed: game.seed,
+        policy_mode: game.policy_mode,
         rng: game.rng,
         difficulty: game.difficulty,
         wave: game.wave,
@@ -985,10 +1147,10 @@
 
     globalThis.SpaceDecisionCore = Object.freeze({
       ENGINE_VERSION, DT_MS, ACTION_IDS, FIRE_IDS, LEASE_TICKS, LEASE_MS, RULES, DEFAULT_DIFFICULTY, HARDEST_DIFFICULTY,
-      createGame, stepGame, observeGame, serializeGame, restoreGame, hashGame, gameStatus,
+      createGame, stepGame, coordinateAction, stepPolicyTick, observeGame, serializeGame, restoreGame, hashGame, gameStatus,
       normalizeDifficulty, arenaFor, velocityFor, waveProfile, baseEnemyCountForWave, enemyCountForWave,
       fireIntervalForDifficulty, bulletSpeedForDifficulty, rulesManifest,
-      _private: Object.freeze({ sweptContact, segmentClearance, hostileThreats, stableStringify }),
+      _private: Object.freeze({ sweptContact, segmentClearance, hostileThreats, stableStringify, rankRouteOptions }),
     });
   })();
   </script>
@@ -1710,9 +1872,11 @@
       const resolved = djev.commandForTick(controller, { tick:game.tick, wall_ms:nowWall });
       updateRecentFromEvents(resolved.events);
       enqueueEvents(resolved.events);
-      const stepped = core.stepGame(game, resolved.command);
-      if (resolved.command) {
-        lastExecuted = `djev · ${resolved.command.movement} · ${resolved.command.fire} · ${resolved.command.lease} · ${modelIntentText(resolved.command)} · ${(resolved.command.end_tick - game.tick).toFixed(0)} ticks`;
+      const stepped = core.stepPolicyTick(game, resolved.command);
+      const effectiveCommand = stepped.effective_command;
+      if (effectiveCommand) {
+        const source = effectiveCommand.source === "local_safety" ? "local safety" : "djev";
+        lastExecuted = `${source} · ${effectiveCommand.movement} · ${effectiveCommand.fire} · ${effectiveCommand.lease || "emergency"} · ${modelIntentText(effectiveCommand)} · ${(effectiveCommand.end_tick - game.tick).toFixed(0)} ticks`;
       } else {
         lastExecuted = `neutral · hold · cease · ${controller.lastNeutralReason}`;
       }

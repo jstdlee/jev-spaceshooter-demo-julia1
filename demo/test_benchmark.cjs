@@ -55,6 +55,7 @@ test('manifest pins versions, hardest profile, fixed step, and gameplay rules', 
   assert.equal(manifest.engine_version, 'engine-test');
   assert.equal(manifest.prompt_version, PROMPT_VERSION);
   assert.equal(manifest.context_version, CONTEXT_VERSION);
+  assert.equal(manifest.policy_mode, 'hybrid');
   assert.equal(manifest.dt_ms, 1000 / 60);
   assert.deepEqual(manifest.difficulty, HARDEST_PROFILE);
   assert.equal(manifest.rules.player_lives, 3);
@@ -276,6 +277,7 @@ test('offline CLI death emits a final checkpoint after the engine terminal and b
     seed: 20260920,
     profile: 'dense-mid-speed',
     targetSeconds: 10,
+    policyMode: 'djev-only',
     htmlPath: path.join(__dirname, 'space-shooter.html'),
     outDir,
     maxLagMs: 250,
