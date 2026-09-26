@@ -44,8 +44,8 @@ def start_body(engine_hash=None):
             "engine_version": "slice-a-test",
             "engine_hash": engine_hash or source_hash(),
             "dt_ms": 1000 / 60,
-            "prompt_version": "djev-authoritative-v2",
-            "context_version": "djev-observation-v2",
+            "prompt_version": "djev-authoritative-v3",
+            "context_version": "djev-observation-v3",
             "mode": "cli",
             "rules": {
                 "player_speed_px_s": 112,
@@ -73,6 +73,10 @@ def candidate(movement):
             "enemy_clearance_px": 64.25,
             "edge_distances_px": {"left": 461.456, "right": 458.544, "top": 397.654, "bottom": 194.346},
             "shot_eta_ms": None,
+            "crowd_count": 2,
+            "move_contact_ms": 125.0 if movement == "left" else None,
+            "escape_options": 0 if movement == "left" else 6,
+            "escape_clearance_px": None if movement == "left" else 28.75,
         },
     }
 
@@ -157,7 +161,7 @@ class BackendContractTests(unittest.TestCase):
         self.html_path.write_text(html_fixture(), encoding="utf-8")
         self.strategy_path = self.root / "strategy.md"
         self.strategy_text = (
-            "version: djev-authoritative-v2\n"
+            "version: djev-authoritative-v3\n"
             "Prioritize survival and useful fire. Shooting has no movement penalty and no ammo cost.\n"
         )
         self.strategy_path.write_text(self.strategy_text, encoding="utf-8")
@@ -183,7 +187,7 @@ class BackendContractTests(unittest.TestCase):
     def test_run_start_pins_prompt_source_hash_and_runtime_without_auth_secrets(self):
         result = self.start_run()
         self.assertEqual(result["schema_version"], 1)
-        self.assertEqual(result["prompt_version"], "djev-authoritative-v2")
+        self.assertEqual(result["prompt_version"], "djev-authoritative-v3")
         expected_prompt_hash = hashlib.sha256(
             "Prioritize survival and useful fire. Shooting has no movement penalty and no ammo cost.\n".encode("utf-8")
         ).hexdigest()
@@ -192,7 +196,7 @@ class BackendContractTests(unittest.TestCase):
 
         manifest_record = self.read_records(result["run_id"])[0]
         self.assertEqual(manifest_record["record_type"], "run_started")
-        self.assertEqual(manifest_record["context_version"], "djev-observation-v2")
+        self.assertEqual(manifest_record["context_version"], "djev-observation-v3")
         self.assertEqual(manifest_record["engine_source_hash"], source_hash())
         self.assertEqual(manifest_record["prompt_text"], "Prioritize survival and useful fire. Shooting has no movement penalty and no ammo cost.\n")
         self.assertIn("configured_model", manifest_record["model_identity"])
@@ -230,12 +234,14 @@ class BackendContractTests(unittest.TestCase):
                 prediction = body["forecast"]["candidates"][0]["medium"]
                 prediction["endpoint"] = {"x": 480, "y": end_y}
                 prediction["clearance_px"] = None
+                prediction["escape_clearance_px"] = None
                 packed = server.pack_model_context(body)
                 self.assertNotIn("paths", packed)
                 self.assertIn("hold_gap_px", packed)
                 self.assertIsNone(packed["hold_gap_px"])
+                toward = ", toward center" if progress > 15 else ""
                 self.assertEqual(server.build_path_criteria(body)["hold__medium"],
-                                 f"collision=false; collision_ms=None; gap_px=None; center_progress={progress}; wall_room=194.346.")
+                                 f"Tier 2 OK: 6/9 escapes, open gap, near enemy, busy space, stationary{toward}.")
                 self.assertEqual(list(packed["player"]), ["x", "y", "w", "h", "lives", "cooldown_ms", "invulnerability_ms"])
                 self.assertNotIn("private_extra", packed["player"])
                 self.assertEqual(body["state"]["player"]["private_extra"], "not model-visible")
@@ -263,13 +269,14 @@ class BackendContractTests(unittest.TestCase):
                 body["forecast"]["prefix"]["contact_ms"] = 999
                 body["forecast"]["candidates"][0]["short"]["contact_ms"] = 7
                 body["forecast"]["candidates"][0]["medium"]["contact_ms"] = contact
+                body["forecast"]["candidates"][0]["medium"]["move_contact_ms"] = contact
                 body["forecast"]["candidates"].reverse()
                 packed = server.pack_model_context(body)
                 self.assertIs(packed.get("hold_collision"), expected)
                 criteria = server.build_path_criteria(body)
                 self.assertEqual(next(iter(criteria)), "hold__medium")
                 self.assertEqual(criteria["hold__medium"],
-                                 f"collision={str(expected).lower()}; collision_ms={contact}; gap_px=28.75; center_progress=1.7; wall_room=194.346.")
+                                 f"Tier 6 DEADLY: a threat hits the ship in {int(contact)} ms." if expected else "Tier 2 OK: 6/9 escapes, tight gap, near enemy, busy space, stationary.")
                 self.assertEqual(packed["hold_gap_px"], 28.75)
                 self.assertEqual(packed["wait_collision_ms"], 999)
                 self.assertEqual(body["forecast"]["candidates"][-1]["medium"]["contact_ms"], contact)
@@ -278,6 +285,7 @@ class BackendContractTests(unittest.TestCase):
         body = decision_body("all-colliding")
         for candidate in body["forecast"]["candidates"]:
             candidate["medium"]["contact_ms"] = 0
+            candidate["medium"]["move_contact_ms"] = 0
             candidate["medium"]["clearance_px"] = -0.25
         body["forecast"]["candidates"].reverse()
 
@@ -288,8 +296,28 @@ class BackendContractTests(unittest.TestCase):
             "up_left__medium", "up_right__medium", "down_left__medium", "down_right__medium",
         ])
         for criterion in criteria.values():
-            self.assertEqual(criterion, "collision=true; collision_ms=0; gap_px=-0.25; center_progress=1.7; wall_room=194.346.")
+            self.assertEqual(criterion, "Tier 6 DEADLY: a threat hits the ship in 0 ms.")
         self.assertEqual(server.pack_model_context(body)["hold_gap_px"], -0.25)
+
+    def test_path_tiers_rank_contact_escapes_walls_gaps_and_enemy_distance(self):
+        cases = [
+            ({"move_contact_ms": 40.6}, "Tier 6 DEADLY: a threat hits the ship in 40 ms."),
+            ({"escape_options": 0}, "Tier 5 DOOMED: safe now, but every follow-up move is hit."),
+            ({"edge_distances_px": {"left": 461.456, "right": 458.544, "top": 397.654, "bottom": 24.9}},
+             "Tier 4 TRAP: ends pinned against the wall with no escape room."),
+            ({"escape_options": 1}, "Tier 3 RISKY: 1/9 escapes, tight gap, near enemy, busy space, stationary."),
+            ({"escape_clearance_px": 14.9}, "Tier 3 RISKY: 6/9 escapes, grazing gap, near enemy, busy space, stationary."),
+            ({"escape_clearance_px": 40, "enemy_clearance_px": 110, "crowd_count": 1},
+             "Tier 1 GOOD: 6/9 escapes, open gap, open space, stationary."),
+            ({"escape_clearance_px": 40, "enemy_clearance_px": 109.9}, "Tier 2 OK: 6/9 escapes, open gap, near enemy, busy space, stationary."),
+            ({"escape_clearance_px": 40, "enemy_clearance_px": None, "crowd_count": 4, "escape_options": 3},
+             "Tier 2 OK: 3/9 escapes, open gap, crowded, stationary."),
+        ]
+        for update, expected in cases:
+            with self.subTest(update=update):
+                body = decision_body("tier-fixture")
+                body["forecast"]["candidates"][0]["medium"].update(update)
+                self.assertEqual(server.build_path_criteria(body)["hold__medium"], expected)
 
     def test_hold_contact_packing_rejects_invalid_or_ambiguous_forecasts(self):
         for contact in (-1, True, "none", float("inf")):
@@ -462,7 +490,7 @@ class BackendContractTests(unittest.TestCase):
                         self.assertNotIn("paths", sent["state"])
                         self.assertEqual(sent["state"]["hold_gap_px"], 28.75)
                         self.assertEqual(sent["questions"]["path"]["criteria"]["left__medium"],
-                                         "collision=true; collision_ms=125.0; gap_px=28.75; center_progress=1.7; wall_room=194.346.")
+                                         "Tier 6 DEADLY: a threat hits the ship in 125 ms.")
                         self.assertEqual(list(sent["questions"]["fire"]["criteria"]), ["shoot", "cease"])
                         if outcome == "timeout":
                             raise TimeoutError("fixture timeout")
@@ -529,11 +557,15 @@ class BackendContractTests(unittest.TestCase):
         self.assertEqual(list(path_question["criteria"])[1], "left__medium")
         self.assertEqual(list(path_question["criteria"])[-1], "down_right__medium")
         self.assertFalse(any(path_id.endswith("__short") for path_id in path_question["criteria"]))
+        motion_from_up = {
+            "hold": "stationary", "right": "turns", "up": "continues", "down": "reverses",
+            "up_left": "continues", "up_right": "continues", "down_left": "reverses", "down_right": "reverses",
+        }
         self.assertEqual(path_question["criteria"], {
             f"{movement}__medium": (
-                "collision=true; collision_ms=125.0; gap_px=28.75; center_progress=1.7; wall_room=194.346."
+                "Tier 6 DEADLY: a threat hits the ship in 125 ms."
                 if movement == "left" else
-                "collision=false; collision_ms=None; gap_px=28.75; center_progress=1.7; wall_room=194.346."
+                f"Tier 2 OK: 6/9 escapes, tight gap, near enemy, busy space, {motion_from_up[movement]}."
             )
             for movement in ("hold", "left", "right", "up", "down", "up_left", "up_right", "down_left", "down_right")
         })
@@ -575,8 +607,8 @@ class BackendContractTests(unittest.TestCase):
 
         records = self.read_records(run["run_id"])
         request_record = next(record for record in records if record["record_type"] == "decision_request")
-        self.assertEqual(request_record["prompt_version"], "djev-authoritative-v2")
-        self.assertEqual(request_record["context_version"], "djev-observation-v2")
+        self.assertEqual(request_record["prompt_version"], "djev-authoritative-v3")
+        self.assertEqual(request_record["context_version"], "djev-observation-v3")
         self.assertEqual(request_record["rawsnapshot"], body)
         self.assertEqual(request_record["rawsnapshot"]["forecast"]["candidates"][0]["medium"]["enemy_clearance_px"], 64.25)
         self.assertEqual(request_record["rawsnapshot"]["forecast"]["candidates"][0]["short"]["shot_eta_ms"], 218.75)

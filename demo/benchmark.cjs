@@ -7,8 +7,8 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { performance } = require('node:perf_hooks');
 
-const PROMPT_VERSION = 'djev-authoritative-v2';
-const CONTEXT_VERSION = 'djev-observation-v2';
+const PROMPT_VERSION = 'djev-authoritative-v3';
+const CONTEXT_VERSION = 'djev-observation-v3';
 const SCHEMA_VERSION = 1;
 const DT_MS = 1000 / 60;
 const STALE_RESPONSE_MS = 600;
@@ -161,7 +161,7 @@ async function archiveEngineHtmlSnapshot({ outDir, engineHash, html }) {
   }
 }
 
-function buildManifest({ seed, profile, difficulty, engineHash, engineVersion, mode = 'cli', policyMode = 'hybrid', rules = DEFAULT_RULES }) {
+function buildManifest({ seed, profile, difficulty, engineHash, engineVersion, mode = 'cli', policyMode = 'djev-only', rules = DEFAULT_RULES }) {
   const manifestRules = rules == null ? cloneJson(DEFAULT_RULES) : cloneJson(rules);
   return {
     seed,
@@ -1198,7 +1198,7 @@ async function runLiveBenchmark(options) {
     engineHash,
     engineVersion: core.ENGINE_VERSION,
     mode: 'cli',
-    policyMode: options.policyMode || 'hybrid',
+    policyMode: options.policyMode || 'djev-only',
     rules: core.RULES,
   });
   const postJson = options.postJson || ((route, body, timeoutMs) => httpPostJson(options.url, route, body, timeoutMs));
@@ -1572,6 +1572,7 @@ function parseArgs(argv) {
     maxLagMs: DEFAULT_MAX_LAG_MS,
     replayPath: null,
     reportPath: null,
+    policyMode: 'djev-only',
     help: false,
   };
   for (let i = 0; i < argv.length; i += 1) {
@@ -1588,6 +1589,7 @@ function parseArgs(argv) {
     else if (arg === '--html') options.htmlPath = path.resolve(readValue());
     else if (arg === '--out-dir') options.outDir = path.resolve(readValue());
     else if (arg === '--max-lag-ms') options.maxLagMs = Number(readValue());
+    else if (arg === '--policy-mode') options.policyMode = readValue();
     else if (arg === '--replay') options.replayPath = path.resolve(readValue());
     else if (arg === '--report') options.reportPath = path.resolve(readValue());
     else if (arg === '--help' || arg === '-h') options.help = true;
@@ -1596,6 +1598,7 @@ function parseArgs(argv) {
   if (!Number.isInteger(options.seed)) throw new Error('--seed must be an integer');
   if (!Number.isFinite(options.targetSeconds) || options.targetSeconds <= 0) throw new Error('--target-seconds must be positive');
   if (!Number.isFinite(options.maxLagMs) || options.maxLagMs <= 0) throw new Error('--max-lag-ms must be positive');
+  if (!['djev-only', 'hybrid'].includes(options.policyMode)) throw new Error('--policy-mode must be djev-only or hybrid');
   return options;
 }
 

@@ -151,7 +151,8 @@
     const HIT_INVINCIBILITY_S = 1.1;
     const HOSTILE_BOX = Object.freeze({ w: 8, h: 8 });
     const SAFETY_MARGIN_PX = 4;
-    const FORECAST_MIN_HORIZON_MS = 600;
+    const FORECAST_MIN_HORIZON_MS = 1000;
+    const CROWD_RADIUS_PX = 110;
     const ACTION_IDS = Object.freeze(["hold","left","right","up","down","up_left","up_right","down_left","down_right"]);
     const FIRE_IDS = Object.freeze(["shoot","cease"]);
     const LEASE_TICKS = Object.freeze({ short: 15, medium: 30 });
@@ -304,7 +305,7 @@
         tick: 0,
         sim_ms: 0,
         seed,
-        policy_mode: manifest.policy_mode === "djev-only" ? "djev-only" : "hybrid",
+        policy_mode: manifest.policy_mode === "hybrid" ? "hybrid" : "djev-only",
         rng: { algorithm: PRNG_VERSION, state: seed },
         difficulty: normalizeDifficulty(manifest.difficulty || (manifest.profile === "hardest" ? HARDEST_DIFFICULTY : DEFAULT_DIFFICULTY)),
         wave: 1,
@@ -649,7 +650,49 @@
         }
       }
       const edges = edgeDistances(endpoint, arena);
-      return { endpoint, edge_distances_px: edges, room_px: Math.min(edges.left, edges.right, edges.top, edges.bottom), contact_ms:firstContact, clearance_px:minClearance, enemy_clearance_px:minEnemyClearance, shot_eta_ms:shotEtaMs, wall_clamped:wallClamped };
+      const endpointS = leaseEndMs / 1000;
+      const crowdCount = threats.filter((threat) => Math.hypot(threat.x + threat.vx * endpointS - endpoint.x, threat.y + threat.vy * endpointS - endpoint.y) <= CROWD_RADIUS_PX).length;
+      return { endpoint, crowd_count:crowdCount, edge_distances_px: edges, room_px: Math.min(edges.left, edges.right, edges.top, edges.bottom), contact_ms:firstContact, clearance_px:minClearance, enemy_clearance_px:minEnemyClearance, shot_eta_ms:shotEtaMs, wall_clamped:wallClamped };
+    }
+
+    const ESCAPE_LEG_MS = 500;
+
+    function pathContactAndClearance(segments, threats) {
+      let contactMs = null;
+      let clearance = threats.length ? Number.POSITIVE_INFINITY : null;
+      for (const segment of segments) {
+        for (const threat of threats) {
+          const halfExtents = { x:PLAYER_W / 2 + threat.w / 2 + SAFETY_MARGIN_PX, y:PLAYER_H / 2 + threat.h / 2 + SAFETY_MARGIN_PX };
+          const contact = sweptContact(segment, threat, halfExtents);
+          if (contact !== null && (contactMs === null || contact * 1000 < contactMs)) contactMs = contact * 1000;
+          const gap = segmentClearance(segment, threat, halfExtents);
+          if (gap < clearance) clearance = gap;
+        }
+      }
+      return { contact_ms:contactMs, clearance_px:clearance };
+    }
+
+    // Two-step look-ahead: after this move's lease, how many follow-up moves stay clear of current threats?
+    function escapeForecast(game, movement, expectedDelayMs, activeCommand) {
+      const arena = arenaFor(game);
+      const threats = hostileThreats(game);
+      const legStartMs = expectedDelayMs + LEASE_MS.medium;
+      const firstLeg = buildForecastSegments(game, movement, "medium", expectedDelayMs, activeCommand, legStartMs);
+      const cursor = pointAtSegments(firstLeg, legStartMs);
+      const vulnerableStartMs = Math.max(expectedDelayMs, Math.max(0, game.player.invincible_s || 0) * 1000);
+      const first = pathContactAndClearance(segmentsInWindow(firstLeg, vulnerableStartMs, legStartMs), threats);
+      let options = 0;
+      let bestClearance = null;
+      for (const next of ACTION_IDS) {
+        const secondLeg = [];
+        appendMotionSegments(secondLeg, cursor, next, legStartMs, ESCAPE_LEG_MS, arena);
+        const second = pathContactAndClearance(segmentsInWindow(secondLeg, vulnerableStartMs, legStartMs + ESCAPE_LEG_MS), threats);
+        if (second.contact_ms !== null) continue;
+        options += 1;
+        const clearance = Math.min(first.clearance_px ?? Number.POSITIVE_INFINITY, second.clearance_px ?? Number.POSITIVE_INFINITY);
+        if (bestClearance === null || clearance > bestClearance) bestClearance = clearance;
+      }
+      return { move_contact_ms:first.contact_ms, escape_options:first.contact_ms === null ? options : 0, escape_clearance_px:bestClearance };
     }
 
     function forecastPrefix(game, expectedDelayMs, activeCommand) {
@@ -688,6 +731,7 @@
       const candidates = ACTION_IDS.map((id) => {
         const short = forecastPath(game, id, "short", expectedDelayMs, activeCommand);
         const medium = forecastPath(game, id, "medium", expectedDelayMs, activeCommand);
+        const escape = escapeForecast(game, id, expectedDelayMs, activeCommand);
         const project = (forecast) => ({
           endpoint: { x:rounded(forecast.endpoint.x), y:rounded(forecast.endpoint.y) },
           contact_ms: forecast.contact_ms === null ? null : rounded(forecast.contact_ms),
@@ -700,10 +744,12 @@
             bottom: rounded(forecast.edge_distances_px.bottom),
           },
           room_px: rounded(forecast.room_px),
+          crowd_count: forecast.crowd_count,
           shot_eta_ms: forecast.shot_eta_ms === null ? null : rounded(forecast.shot_eta_ms),
           wall_clamped: forecast.wall_clamped,
         });
-        return { id, short:project(short), medium:project(medium) };
+        const escapeClearance = escape.escape_clearance_px === null || !Number.isFinite(escape.escape_clearance_px) ? null : rounded(escape.escape_clearance_px);
+        return { id, short:project(short), medium:{ ...project(medium), move_contact_ms:escape.move_contact_ms === null ? null : rounded(escape.move_contact_ms), escape_options:escape.escape_options, escape_clearance_px:escapeClearance } };
       });
       const state = {
         tick: game.tick,
@@ -1161,8 +1207,8 @@
 
     const CONTROLLER_VERSION = "space-djev-controller-v2";
     const SCHEMA_VERSION = 1;
-    const PROMPT_VERSION = "djev-authoritative-v2";
-    const CONTEXT_VERSION = "djev-observation-v2";
+    const PROMPT_VERSION = "djev-authoritative-v3";
+    const CONTEXT_VERSION = "djev-observation-v3";
     const MAX_RESPONSE_AGE_MS = 600;
     const ACTION_IDS = globalThis.SpaceDecisionCore.ACTION_IDS;
     const FIRE_IDS = globalThis.SpaceDecisionCore.FIRE_IDS;

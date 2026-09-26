@@ -478,8 +478,8 @@ test('requests offer all nine fixed-medium paths, both fire choices, and all thr
   const { core, controller: api } = loadModules();
   const controller = api.createController({ run_id: 'intent-request', epoch: 1 });
   const request = begin(api, controller, core);
-  assert.equal(request.prompt_version, 'djev-authoritative-v2');
-  assert.equal(request.context_version, 'djev-observation-v2');
+  assert.equal(request.prompt_version, 'djev-authoritative-v3');
+  assert.equal(request.context_version, 'djev-observation-v3');
   assert.deepEqual(Object.keys(request.questions), ['path', 'fire', 'intent']);
   assert.deepEqual(Object.keys(request.questions.path.criteria), [
     'hold__medium', 'left__medium', 'right__medium', 'up__medium', 'down__medium',
@@ -900,6 +900,31 @@ test('a failed safety assessment preserves an authorized route and records the f
   assert.equal(result.effective_command.decision_id, 'proposal-fallback');
   assert.equal(result.use_bomb, false);
   assert.equal(result.events[0].type, 'safety_calculation_failed');
+});
+
+test('medium forecasts report move contact, two-step escape options, and endpoint crowding', () => {
+  const { core } = loadModules();
+  const open = cleanForecastGame(core, { x: 480, y: 400 });
+  for (const candidate of core.observeGame(open, { expected_delay_ms: 0 }).forecast.candidates) {
+    assert.equal(candidate.medium.move_contact_ms, null);
+    assert.equal(candidate.medium.escape_options, 9);
+    assert.equal(candidate.medium.crowd_count, 0);
+  }
+
+  const game = cleanForecastGame(core, { x: 200, y: 300 });
+  game.enemyBullets = [
+    bullet({ id: 'blocks-left', x: 144, y: 300 }),
+    bullet({ id: 'below-right', x: 256, y: 380 }),
+    bullet({ id: 'above-right', x: 256, y: 220 }),
+  ];
+  const byId = Object.fromEntries(core.observeGame(game, { expected_delay_ms: 0 }).forecast.candidates.map((c) => [c.id, c.medium]));
+  assert.ok(byId.left.move_contact_ms > 0);
+  assert.equal(byId.left.escape_options, 0);
+  assert.equal(byId.hold.move_contact_ms, null);
+  assert.ok(byId.hold.escape_options > 0 && byId.hold.escape_options < 9);
+  assert.equal(byId.right.move_contact_ms, null);
+  assert.equal(byId.right.crowd_count, 2);
+  assert.equal(byId.hold.crowd_count, 3);
 });
 
 test('canonical policy ticks return the proposal separately from the effective command', () => {

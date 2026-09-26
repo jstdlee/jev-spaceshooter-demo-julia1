@@ -1,5 +1,7 @@
 # Hybrid Survival Mechanics Implementation Plan
 
+> **Status (2026-09-27): paused after Task 1.** The project goal changed to djev-only control: Djev makes every movement and fire decision, and local code only computes facts and executes. The Task 1 coordinator remains in the core but is off by default (`policy_mode` defaults to `djev-only`; the CLI accepts `--policy-mode hybrid`). Tasks 2–5 are not planned.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add deterministic local movement safety, auto-aim missiles, and a limited emergency bomb while keeping Djev's proposed command and hybrid performance clearly attributable.

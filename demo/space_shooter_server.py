@@ -28,8 +28,8 @@ STRATEGY_PATH = DEMO_DIR / "strategy.md"
 RUNS_DIR = DEMO_DIR / "runs"
 
 SCHEMA_VERSION = 1
-PROMPT_VERSION = "djev-authoritative-v2"
-CONTEXT_VERSION = "djev-observation-v2"
+PROMPT_VERSION = "djev-authoritative-v3"
+CONTEXT_VERSION = "djev-observation-v3"
 DJEV_MODEL_DEFAULT = "jev-latest"
 DJEV_URL_DEFAULT = "http://127.0.0.1:8011"
 MAX_PACKED_STATE_CHARS = 6000
@@ -524,7 +524,25 @@ def _candidate_forecasts(value: Any) -> dict[str, dict[str, Any]]:
     return by_id
 
 
-def _path_table(value: Any, player: dict[str, Any]) -> list[dict[str, Any]]:
+DIRECTION_VECTORS = {
+    "hold": (0, 0), "left": (-1, 0), "right": (1, 0), "up": (0, -1), "down": (0, 1),
+    "up_left": (-1, -1), "up_right": (1, -1), "down_left": (-1, 1), "down_right": (1, 1),
+}
+
+
+def _motion_relation(movement: str, current_movement: str | None) -> str:
+    """How a candidate relates to the motion already executing: aimed shots target where the ship was."""
+    if movement == "hold":
+        return "stationary"
+    cx, cy = DIRECTION_VECTORS.get(current_movement or "hold", (0, 0))
+    mx, my = DIRECTION_VECTORS[movement]
+    if (cx, cy) == (0, 0):
+        return "starts"
+    dot = cx * mx + cy * my
+    return "continues" if dot > 0 else "reverses" if dot < 0 else "turns"
+
+
+def _path_table(value: Any, player: dict[str, Any], current_movement: str | None = None) -> list[dict[str, Any]]:
     by_id = _candidate_forecasts(value)
     center_distance = math.hypot(player["x"] - ARENA_CENTER_X, player["y"] - ARENA_CENTER_Y)
     rows: list[dict[str, Any]] = []
@@ -545,6 +563,15 @@ def _path_table(value: Any, player: dict[str, Any]) -> list[dict[str, Any]]:
                 center_distance - math.hypot(end_x - ARENA_CENTER_X, end_y - ARENA_CENTER_Y),
                 f"{name}.center_progress",
             ),
+            "crowd": _nonnegative_int(prediction.get("crowd_count"), f"{name}.crowd_count"),
+            "move_collision_ms": _observed_number(prediction, "move_contact_ms", name, nullable=True, minimum=0),
+            "escape_options": _nonnegative_int(prediction.get("escape_options"), f"{name}.escape_options"),
+            "escape_gap_px": _observed_number(prediction, "escape_clearance_px", name, nullable=True),
+            "enemy_gap_px": (
+                _observed_number(prediction, "enemy_clearance_px", name, nullable=True)
+                if "enemy_clearance_px" in prediction else None
+            ),
+            "motion": _motion_relation(movement, current_movement),
         })
     return rows
 
@@ -585,16 +612,63 @@ def _packed_hits(value: Any) -> list[dict[str, Any]]:
     return rows
 
 
+# Tier numbers lead each label: Djev compares a leading rank far more reliably than prose or raw numbers.
+PATH_TIERS = {"GOOD": 1, "OK": 2, "RISKY": 3, "TRAP": 4, "DOOMED": 5, "DEADLY": 6}
+OPEN_GAP_PX = 40
+TIGHT_GAP_PX = 15
+TRAP_WALL_ROOM_PX = 25
+NEAR_ENEMY_PX = 110
+GOOD_MIN_ESCAPES = 4
+OK_MIN_ESCAPES = 2
+CENTER_PROGRESS_PX = 15
+MOTION_WORDS = {"stationary": "stationary", "starts": "starts moving", "continues": "continues", "turns": "turns", "reverses": "reverses"}
+
+
+def path_tier(row: dict[str, Any]) -> str:
+    if row["move_collision_ms"] is not None:
+        return "DEADLY"
+    if row["escape_options"] == 0:
+        return "DOOMED"
+    if row["wall_room"] < TRAP_WALL_ROOM_PX:
+        return "TRAP"
+    gap = row["escape_gap_px"]
+    near_enemy = row["enemy_gap_px"] is not None and row["enemy_gap_px"] < NEAR_ENEMY_PX
+    if row["escape_options"] >= GOOD_MIN_ESCAPES and (gap is None or gap >= OPEN_GAP_PX) and not near_enemy:
+        return "GOOD"
+    if row["escape_options"] >= OK_MIN_ESCAPES and (gap is None or gap >= TIGHT_GAP_PX):
+        return "OK"
+    return "RISKY"
+
+
+def path_label(row: dict[str, Any]) -> str:
+    """Translate one path forecast into facts the model can compare without arithmetic."""
+    tier = path_tier(row)
+    prefix = f"Tier {PATH_TIERS[tier]} {tier}"
+    if tier == "DEADLY":
+        return f"{prefix}: a threat hits the ship in {int(row['move_collision_ms'])} ms."
+    if tier == "DOOMED":
+        return f"{prefix}: safe now, but every follow-up move is hit."
+    if tier == "TRAP":
+        return f"{prefix}: ends pinned against the wall with no escape room."
+    gap = row["escape_gap_px"]
+    parts = [
+        f"{row['escape_options']}/9 escapes",
+        "open gap" if gap is None or gap >= OPEN_GAP_PX else "tight gap" if gap >= TIGHT_GAP_PX else "grazing gap",
+    ]
+    if row["enemy_gap_px"] is not None and row["enemy_gap_px"] < NEAR_ENEMY_PX:
+        parts.append("near enemy")
+    parts.append("open space" if row["crowd"] <= 1 else "busy space" if row["crowd"] <= 3 else "crowded")
+    parts.append(MOTION_WORDS[row["motion"]])
+    if row["center_progress"] > CENTER_PROGRESS_PX:
+        parts.append("toward center")
+    return f"{prefix}: {', '.join(parts)}."
+
+
 def build_path_criteria(body: dict[str, Any]) -> dict[str, str]:
     body = _validate_decision_request(body)
-    paths = _path_table(body["forecast"].get("candidates"), _packed_player(body["state"].get("player")))
-    return {
-        row["path"]: (
-            f"collision={str(row['collision']).lower()}; collision_ms={row['collision_ms']}; "
-            f"gap_px={row['gap_px']}; center_progress={row['center_progress']}; wall_room={row['wall_room']}."
-        )
-        for row in paths
-    }
+    active = _active_command(body["state"].get("active_command"), body["snapshot_tick"])
+    paths = _path_table(body["forecast"].get("candidates"), _packed_player(body["state"].get("player")), active and active["movement"])
+    return {row["path"]: path_label(row) for row in paths}
 
 
 def pack_model_context(body: dict[str, Any]) -> dict[str, Any]:
@@ -645,13 +719,10 @@ def build_upstream_payload(run: RunState, packed_state: dict[str, Any], path_cri
             "path": {
                 "type": "choice",
                 "instructions": (
-                    "Survival first. Pick a path with collision=false. "
-                    "Among those, favor large gap_px when hold_collision=true or the hold gap_px is below 15. "
-                    "It is correct to temporarily move away from center to escape. "
-                    "Otherwise favor positive center_progress to return toward center. "
-                    "Near center, small movement is preferable to staying in a narrow gap. "
-                    "If every path collides, choose the largest collision_ms. "
-                    "Never select collision=true to gain center_progress when a collision=false path exists."
+                    "Pick the move that keeps the ship alive. Each move starts with its tier number: 1 is best, 6 is worst. "
+                    "Always pick a move with the lowest tier number present. Within that tier prefer more escapes, "
+                    "then not stationary or reversing, then not near enemy, then open space, then toward center. "
+                    "If every move is tier 6, pick the one hit latest."
                 ),
                 "criteria": path_criteria,
             },

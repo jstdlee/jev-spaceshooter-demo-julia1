@@ -106,7 +106,7 @@ For example, the answer fields may be:
 
 The bridge maps `up_right__medium` to `movement: "up_right"` and `lease: "medium"`. All three choices must validate together. Intent is descriptive: a `recover` label does not activate a hidden client-side return-to-center routine. It can disagree with the quality of the selected movement.
 
-Physics runs at 60 ticks/s. Each medium command authorizes at most **30 ticks / 500 ms**, and a newer valid answer can preempt it on the next tick. One request is pending per game; the next request starts after the previous one completes. Thus 500 ms is an authorization ceiling, not a mandatory wait between decisions. The current response-age limit is 600 ms.
+Physics runs at 60 ticks/s. Each medium command authorizes at most **30 ticks / 500 ms**, and a newer valid answer can preempt it on the next tick. One request is pending per game; the next request starts after the previous one completes. Thus 500 ms is an authorization ceiling, not a mandatory wait between decisions. The current response-age limit is 600 ms. Keeping one request in flight is deliberate: in a deterministic lockstep simulation, overlapping requests (sending again before the previous answer lands) cut survival from ~90 s to ~25 s because each forecast assumes a command that is about to be replaced, and voting across three parallel `samples: 1` calls did not improve choices. Survival tracks latency instead: live hardest-profile runs at ~180 ms reached 88–121 s, while runs at ~300 ms died at 21–50 s.
 
 ## Current decision model
 
@@ -114,27 +114,36 @@ Physics runs at 60 ticks/s. Each medium command authorizes at most **30 ticks / 
 
 The compact state contains the player, whether it is inside the center region, whether holding forecasts a collision, the hold-path gap, estimated API delay, waiting-prefix collision time, and enemy count. It does not send the complete game world or duplicate a large path table.
 
-Instead, each of the nine choice descriptions carries the corresponding physical facts directly:
+Instead, each of the nine choice descriptions is a short label that leads with a **tier number** and then lists physical facts in words:
 
-| Fact | Interpretation |
+```text
+Tier 1 GOOD: 7/9 escapes, open gap, open space, continues, toward center.
+Tier 2 OK: 6/9 escapes, tight gap, near enemy, busy space, turns.
+Tier 6 DEADLY: a threat hits the ship in 125 ms.
+```
+
+| Tier | Meaning (computed from the forecast, never from a preferred answer) |
 | --- | --- |
-| `collision` / `collision_ms` | Predicted collision and time from the observation, after estimated response arrival and known invulnerability expiry |
-| `gap_px` | Minimum swept clearance over that vulnerable forecast window |
-| `wall_room` | Minimum body-to-wall distance at the forecast endpoint |
-| `center_progress` | Current distance to arena center minus forecast endpoint distance; positive means closer |
+| 6 DEADLY | The move's own lease (after the expected API wait) contacts a current threat |
+| 5 DOOMED | The move is clear, but none of the nine follow-up moves over the next 500 ms is clear |
+| 4 TRAP | Ends within 25 px of a wall |
+| 3 RISKY | Fewer than 2 clear follow-ups, or the best continuation grazes a bullet (<15 px) |
+| 2 OK | At least 2 clear follow-ups and at least a tight (≥15 px) gap |
+| 1 GOOD | At least 4 clear follow-ups, an open (≥40 px) gap, and ≥110 px from every enemy ship |
 
-The arena is 960 × 620; its center is `(480,310)`, and the intent-classification center region is `x=360..600`, `y=230..390`. Right increases x; down increases y. These facts do not mark a winning action. The model still has to compare them.
+The remaining words are facts for choosing within a tier: the number of clear follow-up moves (`escapes`), the best continuation's bullet gap, whether the path passes within 110 px of an enemy ship (enemies fire point-blank as they drift down), how many threats will be within 110 px of the endpoint (`open space` / `busy space` / `crowded`), how the move relates to the command already executing (`stationary`, `continues`, `turns`, `reverses`; wave-1 enemies aim at the ship's current position), and `toward center` when the endpoint is at least 15 px closer to center.
 
-The forecast accounts for the active command during expected API wait, then the proposed movement. Its horizon is at least 600 ms and extends through estimated delay plus the 500 ms lease. Existing bullets use observed velocity; enemies use a current-linear approximation. Future shots/spawns and hidden random state are excluded. A missing clearance measurement is not a promise of safety, especially when invulnerability covers the window.
+Why this encoding: measured on recorded states, Djev picked a path ending against a wall in 33% of decisions when given nine rows of raw numbers, even though it almost never picked `collision=true`; 9 of 11 hits were at a wall. Prose tiers cut below-best picks to about 8%; the leading tier number cut them to about 1%.
 
-Richer enemy-spacing and shot-interception forecasts exist in the client/UI, but are **not current live decision fields**. The current fire question asks the model to shoot when enemies exist; it is not a sophisticated target-pursuit planner.
+The forecast accounts for the active command during expected API wait, then the proposed movement for the 500 ms lease, then each follow-up move for another 500 ms. Existing bullets use observed velocity; enemies use a current-linear approximation. Future shots/spawns and hidden random state are excluded. A missing clearance measurement is not a promise of safety, especially when invulnerability covers the window.
+
+The current fire question asks the model to shoot when enemies exist; it is not a sophisticated target-pursuit planner.
 
 ### Tactical priorities sent to djev
 
-1. Prefer a non-colliding path. Avoidance outranks returning to center.
-2. When holding is dangerous or its gap is narrow, seek more clearance—even if that temporarily moves away from center.
-3. Otherwise favor positive center progress to recover maneuvering room. Near the center, a small reposition can be preferable to waiting in a narrow gap.
-4. If all paths collide, prefer the latest predicted contact. This is only an attempt to buy time, not a guarantee of escape.
+1. Always pick from the lowest tier number present.
+2. Within that tier: more escapes, then not stationary or reversing, then not near an enemy ship, then open space, then toward center. Center is a way to gain space, not a place to hold.
+3. If every move is DEADLY, pick the latest predicted contact. This only buys time.
 
 These are **model instructions**, not conditional steering code in the game. The model can fail to follow them. The shared framing is in [strategy.md](demo/strategy.md); factual option construction and question-specific instructions are in [space_shooter_server.py](demo/space_shooter_server.py), especially `_path_table`, `build_path_criteria`, `pack_model_context`, and `build_upstream_payload`.
 

@@ -55,7 +55,7 @@ test('manifest pins versions, hardest profile, fixed step, and gameplay rules', 
   assert.equal(manifest.engine_version, 'engine-test');
   assert.equal(manifest.prompt_version, PROMPT_VERSION);
   assert.equal(manifest.context_version, CONTEXT_VERSION);
-  assert.equal(manifest.policy_mode, 'hybrid');
+  assert.equal(manifest.policy_mode, 'djev-only');
   assert.equal(manifest.dt_ms, 1000 / 60);
   assert.deepEqual(manifest.difficulty, HARDEST_PROFILE);
   assert.equal(manifest.rules.player_lives, 3);
