@@ -369,14 +369,14 @@ func TestPathTiersRankContactEscapesWallsGapsAndEnemyDistance(t *testing.T) {
 func TestBombCriteriaRankUseOnlyWithoutSafeMove(t *testing.T) {
 	urgent := buildBombCriteria(BombFacts{Charges: 1, RadiusPx: 200, Bullets: 7, Enemies: 0}, 6)
 	if urgent.Get("detonate") != "Rank 1 USE NOW: every move is tier 5 or 6; destroys 7 bullets and 0 enemy ships within 200 px; 0 charges left after." ||
-		urgent.Get("hold") != "Rank 2 WAIT: every move is tier 5 or 6; the ship is likely hit. Keeps 1 charges." {
+		urgent.Get("hold") != "Rank 2 WAIT: every move is tier 5 or 6; the ship is likely hit. Keeps 1 charges and 0 jets." {
 		t.Fatalf("urgent %q / %q", urgent.Get("detonate"), urgent.Get("hold"))
 	}
 	if !reflect.DeepEqual(urgent.Keys(), BombIDs) {
 		t.Fatalf("bomb choice order %v", urgent.Keys())
 	}
 	calm := buildBombCriteria(BombFacts{Charges: 2, RadiusPx: 200, Bullets: 3, Enemies: 1}, 2)
-	if calm.Get("hold") != "Rank 1 SAVE: a tier 2 move exists. Keeps 2 charges." || calm.Get("detonate") != "Rank 2 WASTE: a tier 2 move exists; destroys 3 bullets and 1 enemy ships within 200 px; 1 charges left after." {
+	if calm.Get("hold") != "Rank 1 SAVE: a tier 2 move exists. Keeps 2 charges and 0 jets." || calm.Get("detonate") != "Rank 2 WASTE: a tier 2 move exists; destroys 3 bullets and 1 enemy ships within 200 px; 1 charges left after." {
 		t.Fatalf("calm %q / %q", calm.Get("hold"), calm.Get("detonate"))
 	}
 	nothing := buildBombCriteria(BombFacts{Charges: 2, RadiusPx: 200}, 6)
@@ -387,10 +387,14 @@ func TestBombCriteriaRankUseOnlyWithoutSafeMove(t *testing.T) {
 	if empty.Get("hold") != "Rank 1: no charges left." {
 		t.Fatalf("%q", empty.Get("hold"))
 	}
+	sacrifice := buildBombCriteria(BombFacts{Charges: 0, RadiusPx: 200, Bullets: 5, SacrificeJets: 3}, 6)
+	if sacrifice.Get("detonate") != "Rank 1 USE NOW: every move is tier 5 or 6; destroys 5 bullets and 0 enemy ships within 200 px; no bombs left, so one escort jet self-destructs (2 jets left after)." {
+		t.Fatalf("sacrifice %q", sacrifice.Get("detonate"))
+	}
 	for _, tc := range []struct {
 		criteria *OrderedMap
 		want     string
-	}{{urgent, "detonate"}, {calm, "hold"}, {nothing, "hold"}, {empty, "hold"}} {
+	}{{urgent, "detonate"}, {calm, "hold"}, {nothing, "hold"}, {empty, "hold"}, {sacrifice, "detonate"}} {
 		if got := oracleBomb(map[string]any{"detonate": tc.criteria.Get("detonate")}); got != tc.want {
 			t.Fatalf("oracle chose %s, want %s", got, tc.want)
 		}
@@ -746,7 +750,7 @@ func TestDecisionSendsCompactContextAndExcludesCheckpoint(t *testing.T) {
 	assertJSON(t, questions["path"].(map[string]any)["criteria"], want)
 	assertJSON(t, questions["fire"].(map[string]any)["criteria"], map[string]any{"shoot": "Fire gun and homing missiles.", "cease": "Do not fire."})
 	assertJSON(t, questions["bomb"].(map[string]any)["criteria"], map[string]any{
-		"hold":     "Rank 1 SAVE: a tier 2 move exists. Keeps 3 charges.",
+		"hold":     "Rank 1 SAVE: a tier 2 move exists. Keeps 3 charges and 0 jets.",
 		"detonate": "Rank 2 WASTE: a tier 2 move exists; destroys 4 bullets and 1 enemy ships within 200 px; 2 charges left after.",
 	})
 	assertJSON(t, payload["state"], decode(t, `{"enemy_count":6}`))

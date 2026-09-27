@@ -969,7 +969,7 @@ test('a bomb clears threats within its radius once per decision and consumes one
   game.enemyBullets = [bullet({ id: 'near', x: 480, y: 300 }), bullet({ id: 'far', x: 480, y: 50 })];
   game.enemies = [scoutEnemy({ id: 'near-enemy', x: 600, y: 400 }), scoutEnemy({ id: 'far-enemy', x: 60, y: 60 })];
   assert.equal(game.bomb.charges, 3);
-  assert.deepEqual(JSON.parse(JSON.stringify(core.observeGame(game, { expected_delay_ms: 0 }).state.bomb)), { charges: 3, max_charges: 6, radius_px: 200, bullets_in_radius: 1, enemies_in_radius: 1 });
+  assert.deepEqual(JSON.parse(JSON.stringify(core.observeGame(game, { expected_delay_ms: 0 }).state.bomb)), { charges: 3, max_charges: 6, radius_px: 200, bullets_in_radius: 1, enemies_in_radius: 1, sacrifice_jets: 0 });
 
   const hold = { movement: 'hold', fire: 'cease', bomb: 'hold', decision_id: 'd0', sequence: 1, source: 'djev' };
   core.stepGame(game, hold);
@@ -990,6 +990,16 @@ test('a bomb clears threats within its radius once per decision and consumes one
   assert.equal(game.bomb.charges, 0);
   assert.ok(core.stepGame(game, { ...detonate, decision_id: 'd4' }).events.some((e) => e.type === 'bomb_unavailable'));
   assert.equal(game.counters.bombsUsed, 3);
+
+  // With bombs gone, an escort jet self-destructs for the same blast.
+  game.wingmen = 2;
+  game.enemyBullets = [bullet({ id: 'late', x: 480, y: 330 })];
+  const sacrifice = core.stepGame(game, { ...detonate, decision_id: 'd5' }).events.find((e) => e.type === 'bomb_detonated');
+  assert.equal(sacrifice.source, 'jet_sacrifice');
+  assert.deepEqual([...sacrifice.removed_bullet_ids], ['late']);
+  assert.equal(game.wingmen, 1);
+  assert.equal(game.bomb.charges, 0);
+  assert.equal(game.counters.jetSacrifices, 1);
 });
 
 test('a new wave keeps bullets in flight instead of clearing them', () => {

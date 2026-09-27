@@ -20,7 +20,7 @@ const REPLAY_NUMERIC_TOLERANCE = 1e-9;
 // Configuration, RNG state, counters, ticks, IDs and other values stay exact.
 const REPLAY_CONTINUOUS_FIELDS = new Set([
   'x', 'y', 'vx', 'vy', 'phase', 'cooldown_s', 'invincible_s',
-  'waveClock_s', 'enemyFireClock_s', 'sim_ms', 'heading', 'age_s', 'missileClock_s',
+  'waveClock_s', 'enemyFireClock_s', 'sim_ms', 'heading', 'age_s', 'missileClock_s', 'wingPhase',
 ]);
 
 const HARDEST_PROFILE = Object.freeze({

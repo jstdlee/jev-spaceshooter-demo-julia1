@@ -140,7 +140,7 @@
   (() => {
     "use strict";
 
-    const ENGINE_VERSION = "space-decision-core-v7";
+    const ENGINE_VERSION = "space-decision-core-v8";
     const DT_MS = 1000 / 60;
     const DT_SECONDS = 1 / 60;
     const WIDTH = 960;
@@ -181,7 +181,9 @@
       spawn_interval_s:{ bomb:11, weapon:17, wingman:16 }, first_spawn_s:{ bomb:6, weapon:9, wingman:14 } });
     // Up to eight little escort jets ring the ship, each facing its own direction (degrees, 0 = right, 90 = down).
     // Their shots destroy enemies and also enemy bullets and missiles; the first two add a missile to each salvo.
-    const WINGMAN = Object.freeze({ max:8, radius:40, slot_angles_deg:[180, 0, 225, 315, 135, 45, 270, 90], shot_speed:520, missile_slots:2 });
+    // The ring orbits the ship at orbit_rad_s, so the outward shots sweep every direction.
+    // With no bombs left, a detonate decision sacrifices one jet for the same blast.
+    const WINGMAN = Object.freeze({ max:8, radius:40, slot_angles_deg:[180, 0, 225, 315, 135, 45, 270, 90], shot_speed:520, missile_slots:2, orbit_rad_s:1.6 });
     // A boss appears at random times, parks near the top, and saturates the arena with bullet rings, aimed fans, and homing missiles.
     const BOSS = Object.freeze({ hp:45, w:96, h:58, score:500, station_y:95, speed:70, first_s:[40, 60], interval_s:[35, 55], bomb_damage:20,
       ring:{ count:14, interval_s:2.4, speed:150 }, fan:{ count:7, spread_rad:1, interval_s:1.8, speed:190 }, missiles:{ count:2, interval_s:4.5 } });
@@ -351,6 +353,7 @@
         bomb: { charges:BOMB.charges, last_decision_id:null },
         weaponLevel: 0,
         wingmen: 0,
+        wingPhase: 0,
         enemyMissiles: [],
         boss: { clock_s:null, active_id:null },
         pickups: [],
@@ -386,6 +389,7 @@
           weaponPickups: 0,
           wingmanPickups: 0,
           wingmenLost: 0,
+          jetSacrifices: 0,
           bulletsIntercepted: 0,
           bossesSpawned: 0,
           bossesDestroyed: 0,
@@ -882,6 +886,7 @@
           radius_px: BOMB.radius_px,
           bullets_in_radius: game.enemyBullets.filter((b) => Math.hypot(b.x - game.player.x, b.y - game.player.y) <= BOMB.radius_px).length,
           enemies_in_radius: game.enemies.filter((e) => Math.hypot(e.x - game.player.x, e.y - game.player.y) <= BOMB.radius_px).length,
+          sacrifice_jets: game.wingmen,
         },
         missiles_active: game.playerMissiles.length,
         weapon_level: game.weaponLevel,
@@ -934,7 +939,7 @@
     // Escort jets hold ring slots around the player (clamped to the arena) and face outward.
     function wingmanPositions(game) {
       return WINGMAN.slot_angles_deg.slice(0, game.wingmen).map((deg, slot) => {
-        const angle = deg * Math.PI / 180;
+        const angle = deg * Math.PI / 180 + game.wingPhase;
         return {
           slot,
           side: Math.cos(angle) < -.1 ? -1 : Math.cos(angle) > .1 ? 1 : 0,
@@ -1199,7 +1204,8 @@
     function detonateBomb(game, command, events) {
       if (!command || command.bomb !== "detonate" || !command.decision_id || game.bomb.last_decision_id === command.decision_id) return;
       game.bomb.last_decision_id = command.decision_id;
-      if (game.bomb.charges <= 0) {
+      const sacrifice = game.bomb.charges <= 0;
+      if (sacrifice && game.wingmen <= 0) {
         events.push({ type:"bomb_unavailable", tick:game.tick, decision_id:command.decision_id });
         return;
       }
@@ -1221,11 +1227,16 @@
         destroyEnemyAt(game, i, events, "bomb");
       }
       const before = game.bomb.charges;
-      game.bomb.charges -= 1;
+      if (sacrifice) {
+        game.wingmen -= 1;
+        game.counters.jetSacrifices += 1;
+      } else {
+        game.bomb.charges -= 1;
+      }
       game.counters.bombsUsed += 1;
       game.counters.bombBulletsCleared += removedBullets.length;
       game.counters.bombEnemiesDestroyed += destroyedEnemies.length;
-      events.push({ type:"bomb_detonated", tick:game.tick, decision_id:command.decision_id, x:center.x, y:center.y, radius_px:BOMB.radius_px, removed_missile_ids:removedMissiles, charges_before:before, charges_after:game.bomb.charges, removed_bullet_ids:removedBullets, destroyed_enemy_ids:destroyedEnemies.reverse() });
+      events.push({ type:"bomb_detonated", tick:game.tick, decision_id:command.decision_id, x:center.x, y:center.y, radius_px:BOMB.radius_px, source:sacrifice ? "jet_sacrifice" : "bomb", jets_after:game.wingmen, removed_missile_ids:removedMissiles, charges_before:before, charges_after:game.bomb.charges, removed_bullet_ids:removedBullets, destroyed_enemy_ids:destroyedEnemies.reverse() });
     }
 
     function spawnBoss(game, events) {
@@ -1365,6 +1376,7 @@
       game.player.cooldown_s -= DT_SECONDS;
       if (fire === "shoot" && game.player.cooldown_s <= 0 && command) emitPlayerShot(game, command, events);
       game.missileClock_s = Math.max(0, game.missileClock_s - DT_SECONDS);
+      if (game.wingmen > 0) game.wingPhase = (game.wingPhase + WINGMAN.orbit_rad_s * DT_SECONDS) % (Math.PI * 2);
       launchMissile(game, command, events);
       if (game.player.invincible_s > 0) game.player.invincible_s = Math.max(0, game.player.invincible_s - DT_SECONDS);
 
@@ -1611,6 +1623,7 @@
         bomb: game.bomb,
         weaponLevel: game.weaponLevel,
         wingmen: game.wingmen,
+        wingPhase: game.wingPhase,
         enemyMissiles: game.enemyMissiles,
         boss: game.boss,
         pickups: game.pickups,
@@ -2219,7 +2232,7 @@
         }
         if (event.type === "bomb_detonated") {
           bombFlash = { x:event.x, y:event.y, radius:event.radius_px, until:performance.now() + 450 };
-          addHistory("bomb", `djev bomb · ${event.removed_bullet_ids.length} bullets · ${event.destroyed_enemy_ids.length} ships · ${event.charges_after} left`, "ok");
+          addHistory("bomb", `${event.source === "jet_sacrifice" ? "jet self-destruct" : "djev bomb"} · ${event.removed_bullet_ids.length} bullets · ${event.destroyed_enemy_ids.length} ships · ${event.charges_after} bombs, ${event.jets_after} jets left`, "ok");
         }
         if (event.type === "command_applied") {
           pushRecentCommand({ movement:event.command.movement, fire:event.command.fire, lease:event.command.lease, intent:event.command.intent, elapsed_ms:0, dx:0, dy:0, source:"djev", sequence:event.command.sequence, start_tick:event.command.start_tick });
@@ -2602,7 +2615,7 @@
         ctx.restore();
       });
       core.WINGMAN.slot_angles_deg.slice(0, game.wingmen).forEach((deg) => {
-        const angle = deg * Math.PI / 180;
+        const angle = deg * Math.PI / 180 + game.wingPhase;
         ctx.save();
         ctx.translate(Math.max(6, Math.min(W - 6, game.player.x + Math.cos(angle) * core.WINGMAN.radius)), Math.max(6, Math.min(H - 6, game.player.y + Math.sin(angle) * core.WINGMAN.radius)));
         ctx.rotate(angle + Math.PI / 2);

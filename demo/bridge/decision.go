@@ -518,6 +518,7 @@ func buildPathCriteria(request *DecisionRequest) (*OrderedMap, int, error) {
 // BombFacts is the validated state.bomb observation.
 type BombFacts struct {
 	Charges, MaxCharges, RadiusPx, Bullets, Enemies int64
+	SacrificeJets                                   int64 // escort jets that can self-destruct once bombs run out
 }
 
 func bombFacts(value any) (BombFacts, error) {
@@ -531,6 +532,11 @@ func bombFacts(value any) (BombFacts, error) {
 			return BombFacts{}, err
 		}
 	}
+	if value, present := object["sacrifice_jets"]; present {
+		if facts.SacrificeJets, err = nonnegativeInt(value, "bomb.sacrifice_jets"); err != nil {
+			return BombFacts{}, err
+		}
+	}
 	return facts, nil
 }
 
@@ -538,15 +544,19 @@ func bombFacts(value any) (BombFacts, error) {
 // rank: detonate ranks first only when no move beats tier 5 and a blast would destroy something.
 func buildBombCriteria(facts BombFacts, bestTier int) *OrderedMap {
 	criteria := NewOrderedMap()
-	if facts.Charges == 0 {
+	if facts.Charges == 0 && facts.SacrificeJets == 0 {
 		criteria.Set("hold", "Rank 1: no charges left.")
 		criteria.Set("detonate", "Rank 2: no charges left; detonating does nothing.")
 		return criteria
 	}
-	blast := fmt.Sprintf("destroys %d bullets and %d enemy ships within %d px; %d charges left after",
-		facts.Bullets, facts.Enemies, facts.RadiusPx, facts.Charges-1)
+	cost := fmt.Sprintf("%d charges left after", facts.Charges-1)
+	if facts.Charges == 0 {
+		cost = fmt.Sprintf("no bombs left, so one escort jet self-destructs (%d jets left after)", facts.SacrificeJets-1)
+	}
+	blast := fmt.Sprintf("destroys %d bullets and %d enemy ships within %d px; %s",
+		facts.Bullets, facts.Enemies, facts.RadiusPx, cost)
 	if bestTier >= bombUrgentTier && facts.Bullets+facts.Enemies > 0 {
-		criteria.Set("hold", fmt.Sprintf("Rank 2 WAIT: every move is tier 5 or 6; the ship is likely hit. Keeps %d charges.", facts.Charges))
+		criteria.Set("hold", fmt.Sprintf("Rank 2 WAIT: every move is tier 5 or 6; the ship is likely hit. Keeps %d charges and %d jets.", facts.Charges, facts.SacrificeJets))
 		criteria.Set("detonate", "Rank 1 USE NOW: every move is tier 5 or 6; "+blast+".")
 		return criteria
 	}
@@ -554,7 +564,7 @@ func buildBombCriteria(facts BombFacts, bestTier int) *OrderedMap {
 	if facts.Bullets+facts.Enemies == 0 {
 		reason = "nothing is in range"
 	}
-	criteria.Set("hold", fmt.Sprintf("Rank 1 SAVE: %s. Keeps %d charges.", reason, facts.Charges))
+	criteria.Set("hold", fmt.Sprintf("Rank 1 SAVE: %s. Keeps %d charges and %d jets.", reason, facts.Charges, facts.SacrificeJets))
 	criteria.Set("detonate", fmt.Sprintf("Rank 2 WASTE: %s; %s.", reason, blast))
 	return criteria
 }
