@@ -4,133 +4,193 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>djev-authoritative space shooter</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@600;800&family=Share+Tech+Mono&display=swap" rel="stylesheet" />
   <style>
-    :root { color-scheme: dark; --bg:#050a14; --panel:#0b1424; --line:#20324d; --text:#e8f1ff; --muted:#91a6c5; --cyan:#5ce1e6; --blue:#6e8cff; --amber:#ffc86b; --red:#ff7086; --green:#79e6a6; }
+    :root {
+      color-scheme: dark;
+      --void:#02040a; --hull:#070d1a; --plate:#0a1426; --line:#16324f; --line-hot:#1f5b86;
+      --text:#d9f3ff; --muted:#6f8fb0; --cyan:#3ef2ff; --magenta:#ff3fd2; --amber:#ffcc4d; --red:#ff4d6d; --green:#46ffa8;
+      --t1:#46ffa8; --t2:#a8ff5a; --t3:#ffcc4d; --t4:#ff9a3d; --t5:#ff5c7a; --t6:#ff2d55;
+      --mono:"Share Tech Mono",ui-monospace,SFMono-Regular,Menlo,monospace; --display:Orbitron,"Share Tech Mono",system-ui,sans-serif;
+    }
     * { box-sizing:border-box; }
-    body { margin:0; min-height:100vh; background:radial-gradient(circle at 50% -10%,#152d50 0,#07101f 38%,#03070e 100%); color:var(--text); font:14px/1.45 Inter,system-ui,sans-serif; }
-    .shell { width:min(1380px,96vw); margin:20px auto; }
-    header { display:flex; align-items:end; justify-content:space-between; gap:16px; margin-bottom:14px; }
-    h1 { margin:0; font-size:clamp(22px,3vw,34px); letter-spacing:-.03em; }
-    .eyebrow { color:var(--cyan); font-size:11px; font-weight:800; letter-spacing:.16em; text-transform:uppercase; }
-    .sub { color:var(--muted); max-width:800px; }
-    .layout { display:grid; grid-template-columns:minmax(0,1.65fr) minmax(350px,.85fr); gap:14px; align-items:start; }
-    .panel { background:linear-gradient(180deg,rgba(15,28,48,.96),rgba(7,14,26,.96)); border:1px solid var(--line); border-radius:14px; box-shadow:0 20px 55px rgba(0,0,0,.28); overflow:hidden; }
-    #game-panel { position:relative; }
+    body { margin:0; min-height:100vh; color:var(--text); font:13px/1.45 var(--mono); background:
+      radial-gradient(ellipse at 50% -20%,rgba(62,242,255,.16),transparent 55%),
+      radial-gradient(ellipse at 110% 110%,rgba(255,63,210,.10),transparent 45%),
+      repeating-linear-gradient(0deg,rgba(62,242,255,.025) 0 1px,transparent 1px 3px), var(--void); }
+    .shell { width:min(1440px,97vw); margin:14px auto 28px; }
+    /* Title bar */
+    header { display:flex; align-items:center; justify-content:space-between; gap:18px; padding:10px 16px; margin-bottom:12px;
+      border:1px solid var(--line); background:linear-gradient(90deg,rgba(62,242,255,.10),rgba(7,13,26,.9) 40%,rgba(255,63,210,.08));
+      clip-path:polygon(14px 0,100% 0,100% calc(100% - 14px),calc(100% - 14px) 100%,0 100%,0 14px); }
+    h1 { margin:0; font:800 clamp(18px,2.3vw,28px)/1.1 var(--display); letter-spacing:.08em; text-transform:uppercase;
+      background:linear-gradient(90deg,var(--cyan),#9ffcff 45%,var(--magenta)); -webkit-background-clip:text; background-clip:text; color:transparent; }
+    .eyebrow { color:var(--cyan); font:600 10px var(--display); letter-spacing:.3em; text-transform:uppercase; opacity:.85; }
+    .sub { color:var(--muted); max-width:640px; font-size:11px; }
+    .link { display:grid; grid-template-columns:auto auto; gap:2px 10px; align-items:center; font-size:11px; white-space:nowrap; }
+    .led { width:9px; height:9px; border-radius:50%; background:var(--muted); box-shadow:0 0 0 2px rgba(0,0,0,.4); display:inline-block; margin-right:6px; vertical-align:middle; }
+    .led.on { background:var(--green); box-shadow:0 0 10px var(--green); } .led.busy { background:var(--amber); box-shadow:0 0 10px var(--amber); } .led.off { background:var(--red); box-shadow:0 0 10px var(--red); }
+    .link b { font:800 18px var(--display); color:var(--cyan); letter-spacing:.04em; }
+    .spark { display:flex; align-items:flex-end; gap:2px; height:22px; grid-column:1 / -1; }
+    .spark i { flex:1; min-width:2px; background:linear-gradient(0deg,var(--cyan),var(--magenta)); opacity:.75; border-radius:1px; }
+    /* Frames */
+    .layout { display:grid; grid-template-columns:minmax(0,1.7fr) minmax(330px,.8fr); gap:12px; align-items:start; }
+    .panel { position:relative; background:linear-gradient(180deg,rgba(10,20,38,.94),rgba(4,9,18,.96)); border:1px solid var(--line);
+      clip-path:polygon(12px 0,100% 0,100% calc(100% - 12px),calc(100% - 12px) 100%,0 100%,0 12px); box-shadow:inset 0 0 40px rgba(62,242,255,.04); }
+    .panel::before { content:""; position:absolute; inset:0; pointer-events:none; border-top:2px solid rgba(62,242,255,.45); width:90px; }
+    #game-panel { overflow:hidden; }
+    .arena { position:relative; }
+    .arena::after { content:""; position:absolute; inset:8px; pointer-events:none; background:
+      linear-gradient(var(--cyan),var(--cyan)) top left/22px 2px no-repeat, linear-gradient(var(--cyan),var(--cyan)) top left/2px 22px no-repeat,
+      linear-gradient(var(--cyan),var(--cyan)) top right/22px 2px no-repeat, linear-gradient(var(--cyan),var(--cyan)) top right/2px 22px no-repeat,
+      linear-gradient(var(--magenta),var(--magenta)) bottom left/22px 2px no-repeat, linear-gradient(var(--magenta),var(--magenta)) bottom left/2px 22px no-repeat,
+      linear-gradient(var(--magenta),var(--magenta)) bottom right/22px 2px no-repeat, linear-gradient(var(--magenta),var(--magenta)) bottom right/2px 22px no-repeat; opacity:.8; }
     canvas { width:100%; display:block; aspect-ratio:48/31; background:#020711; }
-    .hud { display:grid; grid-template-columns:repeat(4,1fr); gap:1px; border-top:1px solid var(--line); background:var(--line); }
-    .hud > div { background:#081221; padding:10px 12px; min-width:0; }
-    .label { display:block; color:var(--muted); font-size:10px; letter-spacing:.1em; text-transform:uppercase; }
-    .value { display:block; margin-top:2px; font-weight:800; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-    .controls { display:flex; flex-wrap:wrap; gap:8px; padding:12px; border-top:1px solid var(--line); }
-    button { border:1px solid #2b496c; border-radius:8px; background:#10213a; color:var(--text); padding:8px 11px; cursor:pointer; font-weight:700; }
-    button:hover { border-color:var(--cyan); }
-    .side { display:grid; gap:14px; }
-    .section { padding:14px; }
+    /* Gauges */
+    .hud { display:grid; grid-template-columns:repeat(5,1fr); gap:1px; background:var(--line); border-top:1px solid var(--line-hot); }
+    .hud > div { background:var(--hull); padding:8px 11px; min-width:0; }
+    .label { display:block; color:var(--muted); font:600 9px var(--display); letter-spacing:.18em; text-transform:uppercase; }
+    .value { display:block; margin-top:3px; font:800 15px var(--display); letter-spacing:.03em; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:#eafcff; }
+    #hud-lives { color:var(--red); text-shadow:0 0 10px rgba(255,77,109,.6); }
+    #hud-bombs { color:var(--amber); text-shadow:0 0 10px rgba(255,204,77,.5); letter-spacing:.12em; }
+    #hud-weapon, #hud-missiles, #hud-pickups { font:13px var(--mono); }
+    /* Controls */
+    .controls { display:flex; flex-wrap:wrap; align-items:center; gap:8px; padding:10px 12px; border-top:1px solid var(--line); background:rgba(2,6,14,.6); }
+    button { font:700 11px var(--display); letter-spacing:.14em; text-transform:uppercase; color:var(--cyan); background:rgba(62,242,255,.06);
+      border:1px solid rgba(62,242,255,.45); padding:9px 14px; cursor:pointer; clip-path:polygon(8px 0,100% 0,100% calc(100% - 8px),calc(100% - 8px) 100%,0 100%,0 8px); }
+    button:hover { background:rgba(62,242,255,.16); box-shadow:0 0 18px rgba(62,242,255,.35); color:#fff; }
+    #restart-button { color:var(--magenta); border-color:rgba(255,63,210,.5); background:rgba(255,63,210,.06); }
+    .controls .sub { font-size:10px; }
+    /* Decision deck under the arena */
+    .deck { display:grid; grid-template-columns:minmax(0,1.25fr) minmax(0,1fr); gap:0; border-top:1px solid var(--line); }
+    .deck > .section + .section { border-left:1px solid var(--line); }
+    @media (max-width:820px) { .deck { grid-template-columns:1fr; } .deck > .section + .section { border-left:0; border-top:1px solid var(--line); } }
+    .side { display:grid; gap:12px; }
+    .section { padding:12px 14px; min-width:0; }
     .section + .section { border-top:1px solid var(--line); }
-    .section h2 { margin:0 0 10px; font-size:13px; letter-spacing:.08em; text-transform:uppercase; }
-    .statusline { display:grid; grid-template-columns:92px 1fr; gap:8px; padding:5px 0; border-bottom:1px solid rgba(56,80,113,.35); }
-    .statusline:last-child { border-bottom:0; }
-    .statusline span:first-child { color:var(--muted); }
-    .statusline strong { min-width:0; overflow-wrap:anywhere; }
-    .under-controls { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:0 14px; border-top:1px solid var(--line); }
-    @media (max-width:760px) { .under-controls { grid-template-columns:1fr; } }
-    .candidate-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:6px; }
-    .candidate { border:1px solid var(--line); border-radius:7px; padding:6px; min-width:0; background:#091528; }
-    .candidate b { display:block; font-size:10px; overflow:hidden; text-overflow:ellipsis; }
-    .candidate small { color:var(--muted); font-size:9px; display:block; line-height:1.2; }
-    .candidate.clear { border-color:rgba(121,230,166,.55); }
-    .candidate.risk { border-color:rgba(255,112,134,.55); }
-    .candidate.bound { opacity:.72; }
-    .metrics { display:grid; grid-template-columns:repeat(2,1fr); gap:8px; }
-    .metric { background:#07111f; border:1px solid var(--line); border-radius:8px; padding:8px; }
-    .metric b { display:block; font-size:17px; }
-    .metric span { color:var(--muted); font-size:9px; line-height:1.25; display:block; }
-    .tuning-grid { display:grid; gap:10px; }
-    .slider-row { display:grid; grid-template-columns:112px minmax(90px,1fr) 58px; gap:9px; align-items:center; color:var(--muted); font-size:12px; }
-    .slider-row b { color:var(--text); text-align:right; font-variant-numeric:tabular-nums; }
-    input[type="range"] { width:100%; accent-color:var(--cyan); }
-    .history { display:grid; gap:6px; max-height:210px; overflow:auto; }
-    .history-item { display:grid; grid-template-columns:72px 1fr auto; gap:7px; color:var(--muted); font-size:11px; }
-    .ok { color:var(--green)!important; } .warn { color:var(--amber)!important; } .bad { color:var(--red)!important; }
-    .note { color:var(--muted); font-size:10px; margin-top:8px; }
-    .http-warning { display:none; width:100%; color:var(--amber); font-size:11px; border:1px solid rgba(255,200,107,.45); border-radius:8px; padding:8px 10px; background:rgba(255,200,107,.08); }
+    .section h2 { display:flex; align-items:center; gap:8px; margin:0 0 10px; font:800 11px var(--display); letter-spacing:.22em; text-transform:uppercase; color:var(--cyan); }
+    .section h2::before { content:""; width:7px; height:7px; background:var(--cyan); box-shadow:0 0 8px var(--cyan); transform:rotate(45deg); }
+    .section h2 small { margin-left:auto; color:var(--muted); font:10px var(--mono); letter-spacing:.05em; text-transform:none; }
+    /* Nav computer: 3x3 compass of the path labels djev chose from */
+    .nav { display:grid; grid-template-columns:repeat(3,1fr); gap:5px; }
+    .nav-cell { --tone:var(--muted); position:relative; min-width:0; min-height:74px; padding:6px 7px; border:1px solid color-mix(in srgb,var(--tone) 45%,transparent);
+      background:linear-gradient(180deg,color-mix(in srgb,var(--tone) 12%,transparent),rgba(2,6,14,.7)); }
+    .nav-cell .dir { position:absolute; top:4px; right:6px; color:var(--muted); font-size:13px; }
+    .nav-cell b { display:block; font:800 20px/1 var(--display); color:var(--tone); text-shadow:0 0 12px color-mix(in srgb,var(--tone) 60%,transparent); }
+    .nav-cell em { display:block; font:700 9px var(--display); letter-spacing:.16em; color:var(--tone); font-style:normal; margin-top:2px; }
+    .nav-cell small { display:block; margin-top:3px; color:#a9c4de; font-size:10px; line-height:1.25; overflow:hidden; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; }
+    .nav-cell.chosen { border:2px solid var(--cyan); box-shadow:0 0 0 1px rgba(62,242,255,.4),0 0 22px rgba(62,242,255,.45) inset,0 0 18px rgba(62,242,255,.35); }
+    .nav-cell .pick { position:absolute; bottom:4px; right:6px; font:800 9px var(--display); letter-spacing:.12em; color:#021018; background:var(--cyan); padding:1px 5px; }
+    .t1 { --tone:var(--t1); } .t2 { --tone:var(--t2); } .t3 { --tone:var(--t3); } .t4 { --tone:var(--t4); } .t5 { --tone:var(--t5); } .t6 { --tone:var(--t6); }
+    /* Ordnance and link */
+    .ord { display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-bottom:10px; }
+    .ord-cell { padding:7px 8px; border:1px solid var(--line); background:rgba(2,6,14,.6); font-size:10px; color:#a9c4de; min-height:58px; }
+    .ord-cell b { display:block; font:800 11px var(--display); letter-spacing:.14em; color:var(--muted); margin-bottom:3px; }
+    .ord-cell.rank1 b { color:var(--green); } .ord-cell.chosen { border-color:var(--amber); box-shadow:0 0 16px rgba(255,204,77,.3) inset; }
+    .ord-cell.chosen b::after { content:" ◂ DJEV"; color:var(--amber); }
+    .statusline { display:grid; grid-template-columns:86px 1fr; gap:8px; padding:4px 0; border-bottom:1px dashed rgba(31,91,134,.4); font-size:11px; }
+    .statusline:last-of-type { border-bottom:0; }
+    .statusline span:first-child { color:var(--muted); text-transform:uppercase; letter-spacing:.08em; font-size:10px; }
+    .statusline strong { min-width:0; overflow-wrap:anywhere; font-weight:400; color:#eafcff; }
+    .metrics { display:grid; grid-template-columns:repeat(2,1fr); gap:6px; }
+    .metric { background:rgba(2,6,14,.6); border:1px solid var(--line); padding:7px 8px; }
+    .metric b { display:block; font:800 16px var(--display); color:var(--cyan); letter-spacing:.03em; }
+    .metric span { color:var(--muted); font-size:9px; line-height:1.25; display:block; text-transform:uppercase; letter-spacing:.06em; }
+    .tuning-grid { display:grid; gap:9px; }
+    .slider-row { display:grid; grid-template-columns:104px minmax(90px,1fr) 52px; gap:9px; align-items:center; color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.06em; }
+    .slider-row b { color:var(--amber); text-align:right; font:800 12px var(--display); }
+    input[type="range"] { width:100%; accent-color:var(--magenta); }
+    .history { display:grid; gap:4px; max-height:230px; overflow:auto; }
+    .history-item { display:grid; grid-template-columns:64px 1fr auto; gap:7px; color:var(--muted); font-size:11px; border-left:2px solid var(--line); padding-left:6px; }
+    .history-item b { text-transform:uppercase; letter-spacing:.08em; font-weight:400; }
+    .ok { color:var(--green)!important; border-color:var(--green)!important; } .warn { color:var(--amber)!important; border-color:var(--amber)!important; } .bad { color:var(--red)!important; border-color:var(--red)!important; }
+    .note { color:var(--muted); font-size:10px; margin-top:8px; line-height:1.4; }
+    .http-warning { display:none; width:100%; color:var(--amber); font-size:11px; border:1px solid rgba(255,204,77,.45); padding:8px 10px; background:rgba(255,204,77,.08); }
     .http-warning.show { display:block; }
-    @media (max-width:980px) { .layout { grid-template-columns:1fr; } .hud { grid-template-columns:repeat(3,1fr); } }
-    @media (max-width:560px) { .shell { width:100%; margin:0; } .panel { border-radius:0; } header { padding:12px; } .hud { grid-template-columns:repeat(2,1fr); } }
+    @media (max-width:1040px) { .layout { grid-template-columns:1fr; } .hud { grid-template-columns:repeat(4,1fr); } }
+    @media (max-width:600px) { .shell { width:100%; margin:0; } header { flex-wrap:wrap; } .hud { grid-template-columns:repeat(2,1fr); } }
   </style>
 </head>
 <body>
   <main class="shell">
     <header>
-      <div><div class="eyebrow">djev · API-authoritative path + fire + bomb</div><h1>Space shooter live control trace</h1></div>
-      <div class="sub">djev returns three atomic choices: one of nine movement paths, shoot/cease (gun plus homing missiles), and hold/detonate for the bomb. Each accepted command authorizes at most 500 ms; any missing, invalid, or stale choice means neutral hold plus cease. Fly into floating pickups for bombs (max 6), weapon power, and wingman fighters.</div>
+      <div>
+        <div class="eyebrow">djev autopilot · path + fire + bomb</div>
+        <h1>Jev Strike // Space Shooter</h1>
+        <div class="sub">Every 500 ms-max command comes from djev: one of nine ranked paths, shoot/cease (gun, missiles, escort jets), and hold/detonate. Missing, invalid, or stale answers mean neutral hold plus cease.</div>
+      </div>
+      <div class="link" aria-label="Djev link">
+        <span><i id="link-led" class="led"></i>DJEV LINK</span><b id="link-latency">— ms</b>
+        <span id="link-status">idle</span><span id="link-rate">0.0 dec/s</span>
+        <div class="spark" id="latency-spark"></div>
+      </div>
     </header>
     <div class="layout">
       <section id="game-panel" class="panel">
-        <canvas id="game" width="960" height="620" aria-label="Space shooter arena"></canvas>
+        <div class="arena"><canvas id="game" width="960" height="620" aria-label="Space shooter arena"></canvas></div>
         <div class="hud">
-          <div><span class="label">Wave</span><span class="value" id="hud-wave">1</span></div>
-          <div><span class="label">Score</span><span class="value" id="hud-score">0</span></div>
           <div><span class="label">Hull</span><span class="value" id="hud-lives">♥♥♥</span></div>
-          <div><span class="label">Run ID</span><span class="value" id="hud-run">starting</span></div>
-          <div><span class="label">Sim elapsed</span><span class="value" id="hud-elapsed">0.0 s</span></div>
-          <div><span class="label">Mode</span><span class="value" id="hud-mode">AUTO</span></div>
           <div><span class="label">Bombs</span><span class="value" id="hud-bombs">●●●</span></div>
+          <div><span class="label">Score</span><span class="value" id="hud-score">0</span></div>
+          <div><span class="label">Wave</span><span class="value" id="hud-wave">1</span></div>
+          <div><span class="label">Mission time</span><span class="value" id="hud-elapsed">0.0 s</span></div>
+          <div><span class="label">Weapon</span><span class="value" id="hud-weapon">Lv 0</span></div>
           <div><span class="label">Missiles</span><span class="value" id="hud-missiles">0 · 0 kills</span></div>
-          <div><span class="label">Weapon</span><span class="value" id="hud-weapon">Lv 0 · 1-way</span></div>
-          <div><span class="label">Pickups</span><span class="value" id="hud-pickups">0 bomb · 0 weapon</span></div>
+          <div><span class="label">Supply · escort</span><span class="value" id="hud-pickups">0 bomb · 0 weapon</span></div>
+          <div><span class="label">Mode</span><span class="value" id="hud-mode">AUTO</span></div>
+          <div><span class="label">Run</span><span class="value" id="hud-run">starting</span></div>
         </div>
         <div class="controls">
           <button id="autopilot-button">Auto pilot: ON</button>
           <button id="pause-button">Pause</button>
           <button id="restart-button">Restart run</button>
-          <span id="http-warning" class="http-warning">This page is open as a local file, so djev and trace HTTP endpoints are unreachable. Serve it from the preview/server HTTP URL for model-controlled evidence; local file play remains neutral hold plus cease on failures.</span>
-          <span class="sub">Manual input, pause, reset, profile changes, or lag invalidate benchmark qualification for the active run.</span>
+          <span id="http-warning" class="http-warning">This page is open as a local file, so djev and trace HTTP endpoints are unreachable. Serve it from the bridge URL for model-controlled evidence; local file play remains neutral hold plus cease.</span>
+          <span class="sub">Manual input, pause, reset, difficulty changes, or lag invalidate benchmark qualification for the active run.</span>
         </div>
-        <div class="under-controls">
+        <div class="deck">
           <div class="section">
-            <h2>Authoritative command</h2>
+            <h2>Nav computer <small id="nav-caption">what djev saw · tier 1 best, 6 worst</small></h2>
+            <div id="candidate-grid" class="nav"></div>
+            <div class="note">Each cell is the ranked label djev chose from for that direction; the glowing cell is its pick. Hover a cell for the local forecast behind it.</div>
+          </div>
+          <div class="section">
+            <h2>Command link</h2>
+            <div id="ordnance" class="ord"></div>
             <div class="statusline"><span>djev</span><strong id="selected">none</strong></div>
             <div class="statusline"><span>Executing</span><strong id="executed">neutral · hold · cease</strong></div>
             <div class="statusline"><span>Pending</span><strong id="request-status">idle</strong></div>
             <div class="statusline"><span>Neutral</span><strong id="neutral-reason">startup</strong></div>
             <div class="statusline"><span>Trace</span><strong id="trace-path">not started</strong></div>
-            <div class="statusline"><span>Run integrity</span><strong id="qualification">pending trace</strong></div>
-            <div class="note">Trace completion confirms recording integrity; it does not mean the survival benchmark passed.</div>
-            <div class="note">Intent and API p report the model's selected intent and returned probability. They do not steer local actions; p is not a calibrated survival estimate.</div>
-          </div>
-          <div class="section">
-            <h2>All nine movement observations</h2>
-            <div id="candidate-grid" class="candidate-grid"></div>
-            <div class="note">Each medium path reaches djev as a tier-numbered label (1 GOOD … 6 DEADLY) built from these forecasts: contact during the move, clear follow-up moves, bullet gap, enemy and wall distance, crowding, motion versus the executing command, and pickups it collects or approaches. The cells here are a debug view of the same forecasts.</div>
+            <div class="statusline"><span>Integrity</span><strong id="qualification">pending trace</strong></div>
           </div>
         </div>
       </section>
       <aside class="side">
         <section id="decision-panel" class="panel">
           <div class="section">
-            <h2>Difficulty</h2>
+            <h2>Threat level</h2>
             <div class="tuning-grid">
-              <label class="slider-row"><span>Bullet density</span><input id="bullet-density" type="range" min="1" max="4" step="0.25" value="1" /><b id="bullet-density-value">1.00x</b></label>
-              <label class="slider-row"><span>Enemy density</span><input id="enemy-density" type="range" min="1" max="3" step="0.25" value="1" /><b id="enemy-density-value">1.00x</b></label>
-              <label class="slider-row"><span>Fast bullets</span><input id="fast-bullet-ratio" type="range" min="0" max="0.85" step="0.05" value="0" /><b id="fast-bullet-ratio-value">0%</b></label>
-              <label class="slider-row"><span>Fast speed</span><input id="fast-bullet-speed" type="range" min="1.1" max="2.4" step="0.1" value="1.6" /><b id="fast-bullet-speed-value">1.60x</b></label>
+              <label class="slider-row"><span>Bullet density</span><input id="bullet-density" type="range" min="1" max="8" step="0.25" value="1" /><b id="bullet-density-value">1.00x</b></label>
+              <label class="slider-row"><span>Enemy density</span><input id="enemy-density" type="range" min="1" max="6" step="0.25" value="1" /><b id="enemy-density-value">1.00x</b></label>
+              <label class="slider-row"><span>Fast bullets</span><input id="fast-bullet-ratio" type="range" min="0" max="1" step="0.05" value="0" /><b id="fast-bullet-ratio-value">0%</b></label>
+              <label class="slider-row"><span>Fast speed</span><input id="fast-bullet-speed" type="range" min="1.1" max="4.8" step="0.1" value="1.6" /><b id="fast-bullet-speed-value">1.60x</b></label>
             </div>
           </div>
           <div class="section">
-            <h2>API observations</h2>
+            <h2>Link telemetry</h2>
             <div class="metrics">
-              <div class="metric"><b id="metric-latency">260.0</b><span>median completed latency ms</span></div>
-              <div class="metric"><b id="metric-token-rate">—</b><span>API token throughput, tok/s</span></div>
-              <div class="metric"><b id="metric-completed-rate">0.00</b><span>rolling completed requests/s</span></div>
+              <div class="metric"><b id="metric-latency">260.0</b><span>median round trip ms</span></div>
+              <div class="metric"><b id="metric-token-rate">—</b><span>token throughput tok/s</span></div>
+              <div class="metric"><b id="metric-completed-rate">0.00</b><span>decisions / s</span></div>
               <div class="metric"><b id="metric-usage">— / —</b><span>input / output tokens</span></div>
               <div class="metric"><b id="metric-calls">0</b><span>completed calls</span></div>
-              <div class="metric"><b id="metric-failures">0</b><span>API/transport failures</span></div>
+              <div class="metric"><b id="metric-failures">0</b><span>api / transport failures</span></div>
               <div class="metric"><b id="metric-accepted">0</b><span>valid djev commands</span></div>
               <div class="metric"><b id="metric-applied">0</b><span>applied djev commands</span></div>
             </div>
           </div>
-          <div class="section"><h2>Recent events</h2><div id="history" class="history"></div></div>
+          <div class="section"><h2>Event log</h2><div id="history" class="history"></div></div>
         </section>
       </aside>
     </div>
@@ -140,7 +200,7 @@
   (() => {
     "use strict";
 
-    const ENGINE_VERSION = "space-decision-core-v8";
+    const ENGINE_VERSION = "space-decision-core-v9";
     const DT_MS = 1000 / 60;
     const DT_SECONDS = 1 / 60;
     const WIDTH = 960;
@@ -195,7 +255,7 @@
       player:{ w:PLAYER_W, h:PLAYER_H, lives:3, speed:PLAYER_SPEED, manual_speed:MANUAL_SPEED, hit_invulnerability_s:HIT_INVINCIBILITY_S },
       weapon:{ cooldown_s:PLAYER_COOLDOWN_S, shot_vy:PLAYER_SHOT_SPEED, shot_box:PLAYER_SHOT_BOX, muzzle_y:PLAYER_MUZZLE_Y },
       hostile_box:HOSTILE_BOX,
-      enemy_fire_interval:{ baseline_s:.95, min_s:.18 },
+      enemy_fire_interval:{ baseline_s:.95, min_s:.09 },
       coordinator:{ emergency_horizon_ms:250, safety_margin_px:SAFETY_MARGIN_PX },
       leases_ticks:LEASE_TICKS,
       action_ids:ACTION_IDS,
@@ -218,10 +278,10 @@
 
     function normalizeDifficulty(input = {}) {
       return {
-        bulletDensity: rounded(clamp(finite(input.bulletDensity, DEFAULT_DIFFICULTY.bulletDensity), 1, 4), 2),
-        enemyDensity: rounded(clamp(finite(input.enemyDensity, DEFAULT_DIFFICULTY.enemyDensity), 1, 3), 2),
-        fastBulletRatio: rounded(clamp(finite(input.fastBulletRatio, DEFAULT_DIFFICULTY.fastBulletRatio), 0, .85), 3),
-        fastBulletSpeed: rounded(clamp(finite(input.fastBulletSpeed, DEFAULT_DIFFICULTY.fastBulletSpeed), 1.1, 2.4), 2),
+        bulletDensity: rounded(clamp(finite(input.bulletDensity, DEFAULT_DIFFICULTY.bulletDensity), 1, 8), 2),
+        enemyDensity: rounded(clamp(finite(input.enemyDensity, DEFAULT_DIFFICULTY.enemyDensity), 1, 6), 2),
+        fastBulletRatio: rounded(clamp(finite(input.fastBulletRatio, DEFAULT_DIFFICULTY.fastBulletRatio), 0, 1), 3),
+        fastBulletSpeed: rounded(clamp(finite(input.fastBulletSpeed, DEFAULT_DIFFICULTY.fastBulletSpeed), 1.1, 4.8), 2),
       };
     }
 
@@ -290,7 +350,7 @@
 
     function fireIntervalForDifficulty(difficulty = DEFAULT_DIFFICULTY) {
       const settings = normalizeDifficulty(difficulty);
-      return Math.max(.18, .95 / settings.bulletDensity);
+      return Math.max(.09, .95 / settings.bulletDensity);
     }
 
     function bulletSpeedForDifficulty(difficulty = DEFAULT_DIFFICULTY, randomFn = Math.random, baseSpeed = 169) {
@@ -2010,6 +2070,8 @@
     let recentHits = [];
     let completionEvents = [];
     let lastApi = { latency_ms:null, api_token_throughput:null, usage:{ input_tokens:null, output_tokens:null } };
+    let lastApiAt = null;
+    let latencyHistory = [];
     let lastSelected = "none";
     let bombFlash = null;
     let lastExecuted = "neutral · hold · cease";
@@ -2215,13 +2277,13 @@
       return `djev · ${controller.active.movement} · ${controller.active.fire} · ${controller.active.lease} · ${modelIntentText(controller.active)} · ${remaining} ticks`;
     }
 
+    // Replaces the old intent readout: show the bomb call and path confidence djev returned.
     function modelIntentText(command) {
-      const labels = { evade:"避险", recover:"回中", position:"稳定站位" };
-      if (!Object.hasOwn(labels, command.intent)) return "无模型意图";
-      const probability = command.confidence?.intent;
-      const displayed = Number.isFinite(probability) && probability >= 0 && probability <= 1 ? probability.toFixed(3) : "—";
-      return `${labels[command.intent]} (${command.intent}) · API p=${displayed}`;
+      const probability = command.confidence?.path;
+      const displayed = Number.isFinite(probability) && probability >= 0 && probability <= 1 ? `p=${probability.toFixed(2)}` : "p=—";
+      return `bomb ${command.bomb ?? "hold"} · ${displayed}`;
     }
+
 
     function updateRecentFromEvents(events) {
       for (const event of events) {
@@ -2344,6 +2406,8 @@
         const receivedWall = wallMs(run);
         if (isCurrentRun(run) && !run.ending && ownsPending()) {
           lastApi = reply;
+          lastApiAt = receivedWall;
+          if (Number.isFinite(reply.latency_ms)) latencyHistory = latencyHistory.concat(reply.latency_ms).slice(-40);
           completionEvents.push(receivedWall);
           completionEvents = completionEvents.filter((at) => at > receivedWall - 10000);
           recordEvents(djev.receiveDecision(initiatingController, reply, { tick:run.game.tick, wall_ms:receivedWall }).events);
@@ -2515,15 +2579,8 @@
       $("trace-path").textContent = tracePath;
       $("qualification").textContent = qualification.valid ? qualification.reason : `invalid · ${qualification.reason}`;
 
-      const candidates = observation.forecast.candidates;
-      $("candidate-grid").innerHTML = candidates.map((candidate) => {
-        const medium = candidate.medium;
-        const contact = medium.contact_ms === null ? "no contact" : `contact ${medium.contact_ms} ms`;
-        const enemyClearance = `enemy ${medium.enemy_clearance_px ?? "none"} px`;
-        const cls = medium.wall_clamped ? "bound" : medium.contact_ms === null ? "clear" : "risk";
-        return `<div class="candidate ${cls}"><b>${candidate.id}</b><small>M ${medium.room_px.toFixed(0)}px room</small><small>${contact}</small><small>${enemyClearance}</small></div>`;
-      }).join("");
-
+      renderNavComputer(observation);
+      renderOrdnance();
       const stats = djev.latencyStats(controller);
       const completedRate = completionEvents.filter((at) => at > wallMs() - 10000).length / 10;
       $("metric-latency").textContent = stats.expected_delay_ms.toFixed(1);
@@ -2534,6 +2591,49 @@
       $("metric-failures").textContent = controller.counters.failures;
       $("metric-accepted").textContent = controller.counters.accepted;
       $("metric-applied").textContent = controller.counters.applied;
+      const replyAge = lastApiAt === null ? Infinity : wallMs() - lastApiAt;
+      $("link-led").className = `led ${controller.pending ? "busy" : lastApi.api_ok === false ? "off" : replyAge < 2000 ? "on" : ""}`;
+      $("link-latency").textContent = Number.isFinite(lastApi.latency_ms) ? `${lastApi.latency_ms.toFixed(0)} ms` : "— ms";
+      $("link-status").textContent = controller.pending ? "awaiting djev" : lastApi.api_ok === false ? "link fault" : replyAge < 2000 ? "linked" : "idle";
+      $("link-rate").textContent = `${completedRate.toFixed(1)} dec/s`;
+      const peak = Math.max(250, ...latencyHistory);
+      $("latency-spark").innerHTML = latencyHistory.map((ms) => `<i style="height:${Math.max(8, ms / peak * 100).toFixed(0)}%" title="${ms.toFixed(0)} ms"></i>`).join("");
+    }
+
+    const NAV_LAYOUT = [["up_left", "↖"], ["up", "↑"], ["up_right", "↗"], ["left", "←"], ["hold", "•"], ["right", "→"], ["down_left", "↙"], ["down", "↓"], ["down_right", "↘"]];
+    const escapeHtml = (text) => String(text).replace(/[&<>"]/g, (c) => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;" }[c]));
+
+    // The nav computer shows the exact ranked labels djev chose from, arranged as a compass.
+    function renderNavComputer(observation) {
+      const labels = lastApi.labels && lastApi.labels.path;
+      const local = Object.fromEntries(observation.forecast.candidates.map((c) => [c.id, c.medium]));
+      const confidence = lastApi.confidence && Number.isFinite(lastApi.confidence.path) ? ` ${(lastApi.confidence.path * 100).toFixed(0)}%` : "";
+      $("nav-caption").textContent = labels ? `djev S${lastApi.sequence} · tier 1 best, 6 worst` : "waiting for djev · local forecast";
+      $("candidate-grid").innerHTML = NAV_LAYOUT.map(([id, arrow]) => {
+        const m = local[id];
+        const hint = m ? `local forecast: contact ${m.move_contact_ms ?? "none"} ms · ${m.escape_options}/9 escapes · wall ${m.room_px}px · crowd ${m.crowd_count}` : "";
+        const text = labels ? labels[`${id}__medium`] : null;
+        if (!text) {
+          const tier = !m ? 0 : m.move_contact_ms !== null ? 6 : m.escape_options === 0 ? 5 : 2;
+          return `<div class="nav-cell t${tier}" title="${escapeHtml(hint)}"><span class="dir">${arrow}</span><b>${id.replace("_", " ")}</b><small>${m ? `${m.escape_options}/9 escapes · ${m.room_px}px room` : ""}</small></div>`;
+        }
+        const match = text.match(/^Tier (\d) (\w+): (.*)$/);
+        const tier = match ? match[1] : "?";
+        const chosen = lastApi.movement === id;
+        return `<div class="nav-cell t${tier}${chosen ? " chosen" : ""}" title="${escapeHtml(text + "\n" + hint)}"><span class="dir">${arrow}</span>`
+          + `<b>T${tier}</b><em>${match ? match[2] : ""}</em><small>${escapeHtml(match ? match[3] : text)}</small>${chosen ? `<span class="pick">DJEV${confidence}</span>` : ""}</div>`;
+      }).join("");
+    }
+
+    function renderOrdnance() {
+      const bomb = lastApi.labels && lastApi.labels.bomb;
+      const cells = ["hold", "detonate"].map((choice) => {
+        const text = bomb ? bomb[choice] : "—";
+        const rank1 = /^Rank 1/.test(text);
+        return `<div class="ord-cell${rank1 ? " rank1" : ""}${lastApi.bomb === choice ? " chosen" : ""}" title="${escapeHtml(text)}"><b>BOMB · ${choice}</b>${escapeHtml(text.replace(/^Rank \d:? ?/, ""))}</div>`;
+      });
+      const fire = lastApi.fire ? `<div class="ord-cell chosen" style="grid-column:1 / -1;min-height:0"><b>FIRE · ${lastApi.fire}</b>gun ${core.WEAPON.spread_by_level[game.weaponLevel]}-way · missiles · ${game.wingmen} escort jets</div>` : "";
+      $("ordnance").innerHTML = cells.join("") + fire;
     }
 
     function draw() {
@@ -2670,6 +2770,7 @@
       recentHits = [];
       completionEvents = [];
       lastApi = { latency_ms:null, api_token_throughput:null, usage:{ input_tokens:null, output_tokens:null } };
+      lastApiAt = null;
       lastSelected = "none";
       lastExecuted = "neutral · hold · cease";
       runStartPerf = performance.now();

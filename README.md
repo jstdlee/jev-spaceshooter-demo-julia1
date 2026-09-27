@@ -141,6 +141,10 @@ The forecast accounts for the active command during expected API wait, then the 
 
 The current fire question asks the model to shoot when enemies exist; it is not a sophisticated target-pursuit planner.
 
+### Cockpit view
+
+The page is a sci-fi cockpit around the unchanged arena. The **nav computer** under the arena is a 3×3 compass of the exact ranked labels djev chose from (the bridge returns them with each decision as `labels`); each cell shows its tier (1 green … 6 red) and facts, and djev's pick glows with its path confidence. **Command link** shows the bomb labels with djev's hold/detonate call and the fire call. The title bar carries a djev link light, the last latency, decisions per second, and a latency sparkline. The **threat level** sliders go up to 8× bullets, 6× enemies, 100% fast bullets, and 4.8× fast speed (enemy fire interval floor 0.09 s); the benchmark `hardest` profile is unchanged.
+
 ### Missiles, bombs, and pickups
 
 - **Pickups** float and bounce through the lower play area (y 260–560, away from the enemy formation) and fade out over the last 2 s of a 14 s life. Bomb pickups (orange orbs, first at 6 s, then every 11 s) add a bomb; weapon blocks (color-cycling squares, first at 9 s, then every 17 s) raise the weapon level up to 3: the gun fires 1, 3, 5, 5 spread shots and the missile cap is 4, 5, 6, 6. Spawn positions come from the seeded game RNG, so replays match.

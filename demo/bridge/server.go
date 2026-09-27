@@ -390,7 +390,8 @@ func (s *Server) HandleDecision(ctx context.Context, body any) (map[string]any, 
 	}
 
 	identity := run.identity()
-	payload := buildUpstreamPayload(fmt.Sprint(identity["configured_model"]), run.PromptText, packed, criteria, buildBombCriteria(bomb, bestTier))
+	bombCriteria := buildBombCriteria(bomb, bestTier)
+	payload := buildUpstreamPayload(fmt.Sprint(identity["configured_model"]), run.PromptText, packed, criteria, bombCriteria)
 	// The exact wire bytes are logged before transport and reused for the request itself.
 	wire, err := marshalCompact(payload)
 	if err != nil {
@@ -472,6 +473,8 @@ func (s *Server) HandleDecision(ctx context.Context, body any) (map[string]any, 
 		"fire": normalized["fire"], "lease": normalized["lease"], "bomb": normalized["bomb"], "valid_choice": normalized["valid_choice"],
 		"api_ok": apiOK, "error": normalized["error"], "latency_ms": round(upstream.ElapsedS*1000, 1),
 		"usage": usage, "confidence": normalized["confidence"], "api_token_throughput": throughput,
+		// The exact labels Djev chose from, so the page can show the decision as the model saw it.
+		"labels": map[string]any{"path": criteria, "bomb": bombCriteria},
 	}
 	valid := normalized["valid_choice"] == true
 	run.eventMu.Lock()

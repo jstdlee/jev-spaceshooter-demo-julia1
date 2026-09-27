@@ -601,13 +601,13 @@ test('intent is optional on observed historical spans and never defaults neutral
   assert.equal(observed.state.recent_commands.some((span) => Object.hasOwn(span, 'intent')), false);
 });
 
-test('browser sends applied intent history and renders Chinese plus enum without starting a run', () => {
+test('browser sends applied intent history and renders the bomb call without starting a run', () => {
   const modules = loadModules();
   const { core, controller: api } = modules;
   const game = cleanForecastGame(core);
   const controller = api.createController({ run_id: 'browser-intent', epoch: 1 });
   const { adapter, element } = loadBrowserAdapter(modules, game, controller);
-  for (const [index, intent, label, probability] of [[0, 'evade', '避险', 0], [1, 'recover', '回中', 0.73], [2, 'position', '稳定站位', undefined]]) {
+  for (const [index, intent, probability] of [[0, 'evade', 0], [1, 'recover', 0.73], [2, 'position', undefined]]) {
     const request = begin(api, controller, core, index);
     const received = api.receiveDecision(controller, validReply(request, { movement: 'left', intent, lease: 'medium', confidence: { intent: probability } }), { tick: index, wall_ms: 80 + index });
     adapter.updateRecentFromEvents(received.events);
@@ -620,8 +620,8 @@ test('browser sends applied intent history and renders Chinese plus enum without
     assert.equal(observed.state.recent_commands.at(-1).intent, intent);
     adapter.updatePanel();
     for (const text of [element('selected').textContent, element('executed').textContent, element('history').innerHTML]) {
-      assert.ok(text.includes(`${label} (${intent})`), text);
-      assert.ok(text.includes(`API p=${probability === undefined ? '—' : probability.toFixed(3)}`), text);
+      // Intent is no longer shown (djev is not asked for it); the readout is the bomb call and path confidence.
+      assert.ok(text.includes('bomb hold · p=—'), text);
     }
   }
   game.terminal = { reason: 'death' };
