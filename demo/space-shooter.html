@@ -140,7 +140,7 @@
   (() => {
     "use strict";
 
-    const ENGINE_VERSION = "space-decision-core-v6";
+    const ENGINE_VERSION = "space-decision-core-v7";
     const DT_MS = 1000 / 60;
     const DT_SECONDS = 1 / 60;
     const WIDTH = 960;
@@ -178,9 +178,14 @@
     const WEAPON = Object.freeze({ max_level:3, spread_by_level:[1, 3, 5, 5], spread_step_rad:.16, missile_salvo_by_level:[1, 2, 3, 3], salvo_fan_rad:.55 });
     // Pickups float through the lower play area (away from the enemy formation) and are collected by flying into them.
     const PICKUP = Object.freeze({ box:{ w:24, h:24 }, lifetime_s:14, fade_s:2, speed:55, y_min:260, y_max:560,
-      spawn_interval_s:{ bomb:11, weapon:17, wingman:29 }, first_spawn_s:{ bomb:6, weapon:9, wingman:20 } });
-    // Wingman pickups (rarer) add a small escort fighter on each side; each fires straight shots and one missile per salvo.
-    const WINGMAN = Object.freeze({ max:2, offset_x:34, offset_y:6 });
+      spawn_interval_s:{ bomb:11, weapon:17, wingman:16 }, first_spawn_s:{ bomb:6, weapon:9, wingman:14 } });
+    // Up to eight little escort jets ring the ship, each facing its own direction (degrees, 0 = right, 90 = down).
+    // Their shots destroy enemies and also enemy bullets and missiles; the first two add a missile to each salvo.
+    const WINGMAN = Object.freeze({ max:8, radius:40, slot_angles_deg:[180, 0, 225, 315, 135, 45, 270, 90], shot_speed:520, missile_slots:2 });
+    // A boss appears at random times, parks near the top, and saturates the arena with bullet rings, aimed fans, and homing missiles.
+    const BOSS = Object.freeze({ hp:45, w:96, h:58, score:500, station_y:95, speed:70, first_s:[40, 60], interval_s:[35, 55], bomb_damage:20,
+      ring:{ count:14, interval_s:2.4, speed:150 }, fan:{ count:7, spread_rad:1, interval_s:1.8, speed:190 }, missiles:{ count:2, interval_s:4.5 } });
+    const ENEMY_MISSILE = Object.freeze({ speed:190, turn_rate:1.4, lifetime_s:5, box:{ w:10, h:10 } });
     const BOMB_IDS = Object.freeze(["hold","detonate"]);
     const RULES = Object.freeze({
       arena:{ width:WIDTH, height:HEIGHT },
@@ -199,6 +204,8 @@
       weapon:WEAPON,
       pickup:PICKUP,
       wingman:WINGMAN,
+      boss:BOSS,
+      enemy_missile:ENEMY_MISSILE,
       prng:PRNG_VERSION,
     });
 
@@ -344,6 +351,8 @@
         bomb: { charges:BOMB.charges, last_decision_id:null },
         weaponLevel: 0,
         wingmen: 0,
+        enemyMissiles: [],
+        boss: { clock_s:null, active_id:null },
         pickups: [],
         pickupClock_s: { ...PICKUP.first_spawn_s },
         enemyBullets: [],
@@ -377,13 +386,20 @@
           weaponPickups: 0,
           wingmanPickups: 0,
           wingmenLost: 0,
+          bulletsIntercepted: 0,
+          bossesSpawned: 0,
+          bossesDestroyed: 0,
+          enemyMissilesFired: 0,
+          enemyMissilesDestroyed: 0,
         },
       };
       startWave(game);
+      game.boss.clock_s = randomRange(game, BOSS.first_s[0], BOSS.first_s[1]);
       return game;
     }
 
     function enemyVelocity(game, enemy) {
+      if (enemy.type === "boss") return { vx:enemy.vx, vy:enemy.y < BOSS.station_y ? 40 : 0 };
       return {
         vx: enemy.vx + Math.sin(game.waveClock_s * 2 + enemy.phase) * (enemy.type === "swarm" ? 28 : 9),
         vy: 18 + game.wave * 1.5,
@@ -396,7 +412,8 @@
         const v = enemyVelocity(game, e);
         return { id:e.id, kind:"enemy", x:e.x, y:e.y, vx:v.vx, vy:v.vy, w:e.w, h:e.h };
       });
-      return bullets.concat(enemies);
+      const missiles = (game.enemyMissiles || []).map((m) => ({ id:m.id, kind:"missile", x:m.x, y:m.y, vx:Math.cos(m.heading) * ENEMY_MISSILE.speed, vy:Math.sin(m.heading) * ENEMY_MISSILE.speed, w:ENEMY_MISSILE.box.w, h:ENEMY_MISSILE.box.h }));
+      return bullets.concat(missiles, enemies);
     }
 
     function overlaps(a, b) {
@@ -911,16 +928,21 @@
     }
 
     function missileCap(game) {
-      return Math.min(MISSILE.max_active_top, MISSILE.max_active + game.weaponLevel) + game.wingmen;
+      return Math.min(MISSILE.max_active_top, MISSILE.max_active + game.weaponLevel) + Math.min(game.wingmen, WINGMAN.missile_slots);
     }
 
-    // Wingman positions follow the player, clamped to the arena: left first, then right.
+    // Escort jets hold ring slots around the player (clamped to the arena) and face outward.
     function wingmanPositions(game) {
-      return [-1, 1].slice(0, game.wingmen).map((side) => ({
-        side,
-        x: clamp(game.player.x + side * WINGMAN.offset_x, 6, WIDTH - 6),
-        y: game.player.y + WINGMAN.offset_y,
-      }));
+      return WINGMAN.slot_angles_deg.slice(0, game.wingmen).map((deg, slot) => {
+        const angle = deg * Math.PI / 180;
+        return {
+          slot,
+          side: Math.cos(angle) < -.1 ? -1 : Math.cos(angle) > .1 ? 1 : 0,
+          angle,
+          x: clamp(game.player.x + Math.cos(angle) * WINGMAN.radius, 6, WIDTH - 6),
+          y: clamp(game.player.y + Math.sin(angle) * WINGMAN.radius, 6, HEIGHT - 6),
+        };
+      });
     }
 
     function emitPlayerShot(game, command, events) {
@@ -943,7 +965,7 @@
         events.push({ type:"shot", tick:game.tick, entity_id:shot.id, decision_id:authorizedBy && authorizedBy.decision_id, sequence:authorizedBy && authorizedBy.sequence, x:shot.x, y:shot.y });
       }
       for (const wing of wingmanPositions(game)) {
-        const shot = { id:entityId(game, "pshot"), x:wing.x, y:wing.y - 10, vx:0, vy:PLAYER_SHOT_SPEED, radius:PLAYER_SHOT_RADIUS - 1, level:game.weaponLevel, wingman:wing.side, authorizedBy };
+        const shot = { id:entityId(game, "pshot"), x:wing.x, y:wing.y, vx:Math.cos(wing.angle) * WINGMAN.shot_speed, vy:Math.sin(wing.angle) * WINGMAN.shot_speed, radius:PLAYER_SHOT_RADIUS - 1, level:game.weaponLevel, wingman:wing.slot, authorizedBy };
         game.playerBullets.push(shot);
         game.counters.playerShots += 1;
         events.push({ type:"shot", tick:game.tick, entity_id:shot.id, decision_id:authorizedBy && authorizedBy.decision_id, sequence:authorizedBy && authorizedBy.sequence, x:shot.x, y:shot.y });
@@ -1012,8 +1034,9 @@
     }
 
     function enemyShoot(game, events) {
-      if (!game.enemies.length) return;
-      const enemy = game.enemies[Math.floor(random01(game) * game.enemies.length)];
+      const shooters = game.enemies.filter((enemy) => enemy.type !== "boss");
+      if (!shooters.length) return;
+      const enemy = shooters[Math.floor(random01(game) * shooters.length)];
       const dx = game.player.x - enemy.x;
       const dy = game.player.y - enemy.y;
       const angle = Math.atan2(dy, dx);
@@ -1049,11 +1072,24 @@
     }
 
     function enemyScoreValue(enemy) {
-      return enemy.type === "tank" ? 80 : enemy.type === "swarm" ? 12 : 28;
+      return enemy.type === "boss" ? BOSS.score : enemy.type === "tank" ? 80 : enemy.type === "swarm" ? 12 : 28;
+    }
+
+    function damageEnemyAt(game, index, damage, events, source) {
+      const enemy = game.enemies[index];
+      enemy.hp -= damage;
+      events.push({ type:"enemy_damaged", tick:game.tick, enemy_id:enemy.id, hp:enemy.hp, source });
+      if (enemy.hp <= 0) destroyEnemyAt(game, index, events, source);
     }
 
     function destroyEnemyAt(game, index, events, source) {
       const enemy = game.enemies[index];
+      if (enemy.type === "boss") {
+        game.counters.bossesDestroyed += 1;
+        game.boss.active_id = null;
+        game.boss.clock_s = randomRange(game, BOSS.interval_s[0], BOSS.interval_s[1]);
+        events.push({ type:"boss_destroyed", tick:game.tick, enemy_id:enemy.id, source });
+      }
       game.score += enemyScoreValue(enemy);
       game.counters.enemiesDestroyed += 1;
       events.push({ type:"enemy_destroyed", tick:game.tick, enemy_id:enemy.id, enemy_type:enemy.type, score:game.score, source });
@@ -1101,7 +1137,7 @@
         game.counters.missileLaunches += 1;
         events.push({ type:"missile_launch", tick:game.tick, missile_id:missile.id, target_id:missile.target_id, decision_id:missile.decision_id, salvo });
       }
-      for (const wing of wingmanPositions(game)) {
+      for (const wing of wingmanPositions(game).slice(0, WINGMAN.missile_slots)) {
         if (game.playerMissiles.length >= missileCap(game)) break;
         const target = missileTarget(game, wing, taken);
         taken.add(target.enemy.id);
@@ -1171,9 +1207,16 @@
       const inRange = (thing) => Math.hypot(thing.x - center.x, thing.y - center.y) <= BOMB.radius_px;
       const removedBullets = game.enemyBullets.filter(inRange).map((bullet) => bullet.id);
       game.enemyBullets = game.enemyBullets.filter((bullet) => !inRange(bullet));
+      const removedMissiles = game.enemyMissiles.filter(inRange).map((missile) => missile.id);
+      game.enemyMissiles = game.enemyMissiles.filter((missile) => !inRange(missile));
+      game.counters.enemyMissilesDestroyed += removedMissiles.length;
       const destroyedEnemies = [];
       for (let i = game.enemies.length - 1; i >= 0; i -= 1) {
         if (!inRange(game.enemies[i])) continue;
+        if (game.enemies[i].type === "boss") {
+          damageEnemyAt(game, i, BOSS.bomb_damage, events, "bomb");
+          continue;
+        }
         destroyedEnemies.push(game.enemies[i].id);
         destroyEnemyAt(game, i, events, "bomb");
       }
@@ -1182,7 +1225,101 @@
       game.counters.bombsUsed += 1;
       game.counters.bombBulletsCleared += removedBullets.length;
       game.counters.bombEnemiesDestroyed += destroyedEnemies.length;
-      events.push({ type:"bomb_detonated", tick:game.tick, decision_id:command.decision_id, x:center.x, y:center.y, radius_px:BOMB.radius_px, charges_before:before, charges_after:game.bomb.charges, removed_bullet_ids:removedBullets, destroyed_enemy_ids:destroyedEnemies.reverse() });
+      events.push({ type:"bomb_detonated", tick:game.tick, decision_id:command.decision_id, x:center.x, y:center.y, radius_px:BOMB.radius_px, removed_missile_ids:removedMissiles, charges_before:before, charges_after:game.bomb.charges, removed_bullet_ids:removedBullets, destroyed_enemy_ids:destroyedEnemies.reverse() });
+    }
+
+    function spawnBoss(game, events) {
+      const boss = { id:entityId(game, "boss"), type:"boss", x:WIDTH / 2, y:-BOSS.h, w:BOSS.w, h:BOSS.h, hp:BOSS.hp, maxHp:BOSS.hp,
+        vx:BOSS.speed * (random01(game) < .5 ? -1 : 1), phase:0, ring_s:1.2, fan_s:.8, missile_s:2 };
+      game.enemies.push(boss);
+      game.boss.active_id = boss.id;
+      game.counters.bossesSpawned += 1;
+      events.push({ type:"boss_spawned", tick:game.tick, enemy_id:boss.id });
+    }
+
+    function bossBullet(game, boss, angle, speed, events, extra = {}) {
+      const tuned = bulletSpeedForDifficulty(game.difficulty, () => random01(game), speed);
+      const projectile = { id:entityId(game, "ebullet"), x:boss.x, y:boss.y + boss.h / 2, vx:Math.cos(angle) * tuned.speed, vy:Math.sin(angle) * tuned.speed,
+        radius:tuned.fast ? 5 : 4, fast:tuned.fast, from_enemy_id:boss.id, boss:true, ...extra };
+      game.enemyBullets.push(projectile);
+      game.counters.enemyShots += 1;
+      events.push({ type:"enemy_shot", tick:game.tick, entity_id:projectile.id, enemy_id:boss.id, pattern:"boss", fast:tuned.fast, x:projectile.x, y:projectile.y, vx:projectile.vx, vy:projectile.vy });
+    }
+
+    // Boss patterns: a rotating ring, a fan aimed at the player, and slow homing missiles.
+    function updateBoss(game, events) {
+      if (game.boss.active_id === null) {
+        game.boss.clock_s -= DT_SECONDS;
+        if (game.boss.clock_s <= 0) spawnBoss(game, events);
+        return;
+      }
+      const boss = game.enemies.find((enemy) => enemy.id === game.boss.active_id);
+      if (!boss || boss.y < 20) return;
+      boss.ring_s -= DT_SECONDS;
+      boss.fan_s -= DT_SECONDS;
+      boss.missile_s -= DT_SECONDS;
+      if (boss.ring_s <= 0) {
+        boss.phase += .17;
+        for (let i = 0; i < BOSS.ring.count; i += 1) bossBullet(game, boss, boss.phase + i * Math.PI * 2 / BOSS.ring.count, BOSS.ring.speed, events);
+        boss.ring_s = BOSS.ring.interval_s;
+      }
+      if (boss.fan_s <= 0) {
+        const aim = Math.atan2(game.player.y - boss.y, game.player.x - boss.x);
+        for (let i = 0; i < BOSS.fan.count; i += 1) bossBullet(game, boss, aim + (i / (BOSS.fan.count - 1) - .5) * BOSS.fan.spread_rad, BOSS.fan.speed, events);
+        boss.fan_s = BOSS.fan.interval_s;
+      }
+      if (boss.missile_s <= 0) {
+        for (let i = 0; i < BOSS.missiles.count; i += 1) {
+          const missile = { id:entityId(game, "emissile"), x:boss.x + (i - (BOSS.missiles.count - 1) / 2) * 40, y:boss.y + boss.h / 2, heading:Math.PI / 2 + (i - (BOSS.missiles.count - 1) / 2) * .9, age_s:0, from_enemy_id:boss.id };
+          game.enemyMissiles.push(missile);
+          game.counters.enemyMissilesFired += 1;
+          events.push({ type:"enemy_missile_launch", tick:game.tick, missile_id:missile.id, enemy_id:boss.id });
+        }
+        boss.missile_s = BOSS.missiles.interval_s;
+      }
+    }
+
+    function updateEnemyMissiles(game, command, events) {
+      const maxTurn = ENEMY_MISSILE.turn_rate * DT_SECONDS;
+      game.enemyMissiles = game.enemyMissiles.filter((missile) => {
+        missile.age_s += DT_SECONDS;
+        if (missile.age_s >= ENEMY_MISSILE.lifetime_s) return false;
+        const desired = Math.atan2(game.player.y - missile.y, game.player.x - missile.x);
+        let turn = Math.atan2(Math.sin(desired - missile.heading), Math.cos(desired - missile.heading));
+        missile.heading += clamp(turn, -maxTurn, maxTurn);
+        missile.x += Math.cos(missile.heading) * ENEMY_MISSILE.speed * DT_SECONDS;
+        missile.y += Math.sin(missile.heading) * ENEMY_MISSILE.speed * DT_SECONDS;
+        const box = { x:missile.x, y:missile.y, w:ENEMY_MISSILE.box.w, h:ENEMY_MISSILE.box.h };
+        if (overlaps(box, game.player)) {
+          hitPlayer(game, { kind:"missile", id:missile.id, x:missile.x, y:missile.y, vx:Math.cos(missile.heading) * ENEMY_MISSILE.speed, vy:Math.sin(missile.heading) * ENEMY_MISSILE.speed, w:box.w, h:box.h }, command, events);
+          return false;
+        }
+        return missile.x > -40 && missile.x < WIDTH + 40 && missile.y > -40 && missile.y < HEIGHT + 40;
+      });
+    }
+
+    // Any player shot destroys an enemy missile it touches; escort-jet shots also destroy enemy bullets.
+    function resolveShotInterceptions(game, events) {
+      for (let i = game.playerBullets.length - 1; i >= 0; i -= 1) {
+        const shot = game.playerBullets[i];
+        const box = { x:shot.x, y:shot.y, w:PLAYER_SHOT_BOX.w, h:PLAYER_SHOT_BOX.h };
+        const missileIndex = game.enemyMissiles.findIndex((missile) => overlaps(box, { x:missile.x, y:missile.y, w:ENEMY_MISSILE.box.w, h:ENEMY_MISSILE.box.h }));
+        if (missileIndex >= 0) {
+          events.push({ type:"shot_intercepted", tick:game.tick, shot_id:shot.id, target_id:game.enemyMissiles[missileIndex].id, target:"missile" });
+          game.enemyMissiles.splice(missileIndex, 1);
+          game.playerBullets.splice(i, 1);
+          game.counters.enemyMissilesDestroyed += 1;
+          continue;
+        }
+        if (shot.wingman === undefined) continue;
+        const bulletIndex = game.enemyBullets.findIndex((bullet) => overlaps(box, { x:bullet.x, y:bullet.y, w:HOSTILE_BOX.w, h:HOSTILE_BOX.h }));
+        if (bulletIndex >= 0) {
+          events.push({ type:"shot_intercepted", tick:game.tick, shot_id:shot.id, target_id:game.enemyBullets[bulletIndex].id, target:"bullet" });
+          game.enemyBullets.splice(bulletIndex, 1);
+          game.playerBullets.splice(i, 1);
+          game.counters.bulletsIntercepted += 1;
+        }
+      }
     }
 
     function hitPlayer(game, source, command, events) {
@@ -1234,8 +1371,10 @@
       game.playerBullets = game.playerBullets.filter((shot) => {
         shot.x += (shot.vx || 0) * DT_SECONDS;
         shot.y += shot.vy * DT_SECONDS;
-        return shot.y > -15 && shot.x > -15 && shot.x < WIDTH + 15;
+        return shot.y > -15 && shot.y < HEIGHT + 15 && shot.x > -15 && shot.x < WIDTH + 15;
       });
+      updateEnemyMissiles(game, command, events);
+      resolveShotInterceptions(game, events);
       updatePickups(game, events);
       updateMissiles(game, events);
 
@@ -1253,7 +1392,8 @@
         const v = enemyVelocity(game, enemy);
         enemy.y += v.vy * DT_SECONDS;
         enemy.x += v.vx * DT_SECONDS;
-        if (enemy.x < enemy.w / 2 || enemy.x > WIDTH - enemy.w / 2) enemy.vx *= -1;
+        if (enemy.type === "boss" && (enemy.x < enemy.w / 2 + 20 || enemy.x > WIDTH - enemy.w / 2 - 20)) enemy.vx = -Math.sign(enemy.x - WIDTH / 2) * BOSS.speed;
+        else if (enemy.x < enemy.w / 2 || enemy.x > WIDTH - enemy.w / 2) enemy.vx *= -1;
         if (overlaps(enemy, game.player)) hitPlayer(game, { kind:"enemy", id:enemy.id, x:enemy.x, y:enemy.y, vx:v.vx, vy:v.vy, w:enemy.w, h:enemy.h }, command, events);
         if (enemy.y > HEIGHT + 25) enemy.y = -20;
       });
@@ -1273,6 +1413,7 @@
       }
       resolveMissileHits(game, events);
 
+      updateBoss(game, events);
       game.enemyFireClock_s -= DT_SECONDS;
       if (game.enemyFireClock_s <= 0 && game.enemies.length) {
         enemyShoot(game, events);
@@ -1470,6 +1611,8 @@
         bomb: game.bomb,
         weaponLevel: game.weaponLevel,
         wingmen: game.wingmen,
+        enemyMissiles: game.enemyMissiles,
+        boss: game.boss,
         pickups: game.pickups,
         pickupClock_s: game.pickupClock_s,
         enemyBullets: game.enemyBullets,
@@ -1529,7 +1672,7 @@
     }
 
     globalThis.SpaceDecisionCore = Object.freeze({
-      ENGINE_VERSION, DT_MS, ACTION_IDS, FIRE_IDS, BOMB_IDS, MISSILE, BOMB, WEAPON, PICKUP, WINGMAN, LEASE_TICKS, LEASE_MS, RULES, DEFAULT_DIFFICULTY, HARDEST_DIFFICULTY,
+      ENGINE_VERSION, DT_MS, ACTION_IDS, FIRE_IDS, BOMB_IDS, MISSILE, BOMB, WEAPON, PICKUP, WINGMAN, BOSS, ENEMY_MISSILE, LEASE_TICKS, LEASE_MS, RULES, DEFAULT_DIFFICULTY, HARDEST_DIFFICULTY,
       createGame, stepGame, coordinateAction, stepPolicyTick, observeGame, serializeGame, restoreGame, hashGame, gameStatus,
       normalizeDifficulty, arenaFor, velocityFor, waveProfile, baseEnemyCountForWave, enemyCountForWave,
       fireIntervalForDifficulty, bulletSpeedForDifficulty, rulesManifest,
@@ -2069,6 +2212,8 @@
 
     function updateRecentFromEvents(events) {
       for (const event of events) {
+        if (event.type === "boss_spawned") addHistory("boss", "boss incoming", "warn");
+        if (event.type === "boss_destroyed") addHistory("boss", `boss destroyed by ${event.source}`, "ok");
         if (event.type === "pickup_collected") {
           addHistory("pickup", `${event.kind} pickup · ${event.before} → ${event.after}`, "ok");
         }
@@ -2348,7 +2493,7 @@
       $("hud-mode").textContent = game.terminal ? "ENDED" : paused ? "PAUSED" : autopilot ? "AUTO" : "MANUAL";
       $("hud-bombs").textContent = "●".repeat(game.bomb.charges) + "○".repeat(Math.max(0, core.BOMB.max_charges - game.bomb.charges));
       $("hud-weapon").textContent = `Lv ${game.weaponLevel} · ${core.WEAPON.spread_by_level[game.weaponLevel]}-way · ${core.WEAPON.missile_salvo_by_level[game.weaponLevel]}×salvo · ${Math.min(core.MISSILE.max_active_top, core.MISSILE.max_active + game.weaponLevel)} max`;
-      $("hud-pickups").textContent = `${game.counters.bombPickups} bomb · ${game.counters.weaponPickups} weapon · ${game.wingmen}/${core.WINGMAN.max} wingmen`;
+      $("hud-pickups").textContent = `${game.counters.bombPickups} bomb · ${game.counters.weaponPickups} weapon · ${game.wingmen}/${core.WINGMAN.max} jets${game.boss.active_id ? " · BOSS" : ""}`;
       $("hud-missiles").textContent = `${game.playerMissiles.length} · ${game.counters.missileKills} kills`;
       $("selected").textContent = lastSelected;
       $("executed").textContent = currentExecutingText();
@@ -2440,12 +2585,38 @@
         ctx.fillStyle = `rgba(255,220,120,${(left * .18).toFixed(3)})`; ctx.fill();
         ctx.lineWidth = 1;
       }
-      game.enemies.forEach((enemy) => { ctx.save(); ctx.translate(enemy.x, enemy.y); ctx.fillStyle = enemy.type === "tank" ? "#ffc86b" : enemy.type === "swarm" ? "#c47bff" : "#6e8cff"; ctx.fillRect(-enemy.w / 2, -enemy.h / 2, enemy.w, enemy.h); ctx.restore(); });
-      [-1, 1].slice(0, game.wingmen).forEach((side) => {
+      game.enemies.forEach((enemy) => {
         ctx.save();
-        ctx.translate(Math.max(6, Math.min(W - 6, game.player.x + side * core.WINGMAN.offset_x)), game.player.y + core.WINGMAN.offset_y);
+        ctx.translate(enemy.x, enemy.y);
+        if (enemy.type === "boss") {
+          ctx.fillStyle = "#ff5c7a";
+          ctx.shadowColor = "#ff5c7a"; ctx.shadowBlur = 18;
+          ctx.beginPath(); ctx.moveTo(-enemy.w / 2, -enemy.h / 4); ctx.lineTo(0, -enemy.h / 2); ctx.lineTo(enemy.w / 2, -enemy.h / 4); ctx.lineTo(enemy.w / 3, enemy.h / 2); ctx.lineTo(-enemy.w / 3, enemy.h / 2); ctx.closePath(); ctx.fill();
+          ctx.shadowBlur = 0;
+          ctx.fillStyle = "rgba(0,0,0,.5)"; ctx.fillRect(-enemy.w / 2, -enemy.h / 2 - 10, enemy.w, 5);
+          ctx.fillStyle = "#ffd36b"; ctx.fillRect(-enemy.w / 2, -enemy.h / 2 - 10, enemy.w * Math.max(0, enemy.hp) / enemy.maxHp, 5);
+        } else {
+          ctx.fillStyle = enemy.type === "tank" ? "#ffc86b" : enemy.type === "swarm" ? "#c47bff" : "#6e8cff";
+          ctx.fillRect(-enemy.w / 2, -enemy.h / 2, enemy.w, enemy.h);
+        }
+        ctx.restore();
+      });
+      core.WINGMAN.slot_angles_deg.slice(0, game.wingmen).forEach((deg) => {
+        const angle = deg * Math.PI / 180;
+        ctx.save();
+        ctx.translate(Math.max(6, Math.min(W - 6, game.player.x + Math.cos(angle) * core.WINGMAN.radius)), Math.max(6, Math.min(H - 6, game.player.y + Math.sin(angle) * core.WINGMAN.radius)));
+        ctx.rotate(angle + Math.PI / 2);
         ctx.fillStyle = "#7dffb2";
         ctx.beginPath(); ctx.moveTo(0, -8); ctx.lineTo(6, 5); ctx.lineTo(0, 3); ctx.lineTo(-6, 5); ctx.closePath(); ctx.fill();
+        ctx.restore();
+      });
+      game.enemyMissiles.forEach((missile) => {
+        ctx.save();
+        ctx.translate(missile.x, missile.y);
+        ctx.rotate(missile.heading + Math.PI / 2);
+        ctx.fillStyle = "#ff4d6d";
+        ctx.beginPath(); ctx.moveTo(0, -8); ctx.lineTo(5, 6); ctx.lineTo(-5, 6); ctx.closePath(); ctx.fill();
+        ctx.fillStyle = "rgba(255,160,90,.8)"; ctx.fillRect(-2, 6, 4, 6);
         ctx.restore();
       });
       if (!(game.player.invincible_s > 0 && Math.floor(game.player.invincible_s * 12) % 2 === 0)) {

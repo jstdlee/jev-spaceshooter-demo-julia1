@@ -55,7 +55,7 @@ async function runSeed(modules, options, seed) {
   const control = api.createController({ run_id: runId, epoch: 1 });
   const latencyTicks = Math.max(1, Math.round(options.latencyMs / DT));
   const maxTicks = Math.round(options.seconds * 1000 / DT);
-  const stats = { decisions: 0, bombs: 0, bomb_pickups: 0, weapon_pickups: 0, pickups_spawned: 0, hits: [] };
+  const stats = { decisions: 0, bombs: 0, bomb_pickups: 0, weapon_pickups: 0, wingman_pickups: 0, pickups_spawned: 0, hits: [] };
   let pending = null; // { due_tick, reply }
 
   while (!game.terminal && game.tick < maxTicks) {
@@ -85,7 +85,7 @@ async function runSeed(modules, options, seed) {
       pending = { due_tick: game.tick + latencyTicks, reply };
     }
   }
-  return { seed, sim_s: +(game.sim_ms / 1000).toFixed(1), lives: game.player.lives, wave: game.wave, kills: game.counters.enemiesDestroyed, weapon_level: game.weaponLevel, ...stats };
+  return { seed, sim_s: +(game.sim_ms / 1000).toFixed(1), lives: game.player.lives, wave: game.wave, kills: game.counters.enemiesDestroyed, weapon_level: game.weaponLevel, jets: game.wingmen, bosses: `${game.counters.bossesDestroyed}/${game.counters.bossesSpawned}`, intercepted: game.counters.bulletsIntercepted, ...stats };
 }
 
 async function main() {
@@ -93,7 +93,7 @@ async function main() {
   const modules = loadSpaceModulesFromHtml(path.join(__dirname, 'space-shooter.html'));
   const results = await Promise.all(options.seeds.map((seed) => runSeed(modules, options, seed)));
   for (const r of results) {
-    console.log(JSON.stringify(options.verbose ? r : { seed: r.seed, sim_s: r.sim_s, lives: r.lives, wave: r.wave, kills: r.kills, bombs: r.bombs, picked: `${r.bomb_pickups}b+${r.weapon_pickups}w/${r.pickups_spawned}`, weapon: r.weapon_level, decisions: r.decisions, hits: r.hits.map((h) => `${h.t}s@${h.x},${h.y}`).join(' ') }));
+    console.log(JSON.stringify(options.verbose ? r : { seed: r.seed, sim_s: r.sim_s, lives: r.lives, wave: r.wave, kills: r.kills, bombs: r.bombs, picked: `${r.bomb_pickups}b+${r.weapon_pickups}w+${r.wingman_pickups}j/${r.pickups_spawned}`, weapon: r.weapon_level, jets: r.jets, bosses: r.bosses, intercepted: r.intercepted, decisions: r.decisions, hits: r.hits.map((h) => `${h.t}s@${h.x},${h.y}`).join(' ') }));
   }
   const survived = results.map((r) => r.sim_s);
   const full = survived.filter((s) => s >= options.seconds).length;
