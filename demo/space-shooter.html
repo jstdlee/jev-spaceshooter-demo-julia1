@@ -17,7 +17,7 @@
     .panel { background:linear-gradient(180deg,rgba(15,28,48,.96),rgba(7,14,26,.96)); border:1px solid var(--line); border-radius:14px; box-shadow:0 20px 55px rgba(0,0,0,.28); overflow:hidden; }
     #game-panel { position:relative; }
     canvas { width:100%; display:block; aspect-ratio:48/31; background:#020711; }
-    .hud { display:grid; grid-template-columns:repeat(6,1fr); gap:1px; border-top:1px solid var(--line); background:var(--line); }
+    .hud { display:grid; grid-template-columns:repeat(4,1fr); gap:1px; border-top:1px solid var(--line); background:var(--line); }
     .hud > div { background:#081221; padding:10px 12px; min-width:0; }
     .label { display:block; color:var(--muted); font-size:10px; letter-spacing:.1em; text-transform:uppercase; }
     .value { display:block; margin-top:2px; font-weight:800; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
@@ -73,6 +73,8 @@
           <div><span class="label">Run ID</span><span class="value" id="hud-run">starting</span></div>
           <div><span class="label">Sim elapsed</span><span class="value" id="hud-elapsed">0.0 s</span></div>
           <div><span class="label">Mode</span><span class="value" id="hud-mode">AUTO</span></div>
+          <div><span class="label">Bombs</span><span class="value" id="hud-bombs">●●●</span></div>
+          <div><span class="label">Missiles</span><span class="value" id="hud-missiles">0 · 0 kills</span></div>
         </div>
         <div class="controls">
           <button id="autopilot-button">Auto pilot: ON</button>
@@ -132,7 +134,7 @@
   (() => {
     "use strict";
 
-    const ENGINE_VERSION = "space-decision-core-v3";
+    const ENGINE_VERSION = "space-decision-core-v4";
     const DT_MS = 1000 / 60;
     const DT_SECONDS = 1 / 60;
     const WIDTH = 960;
@@ -161,6 +163,11 @@
     const DEFAULT_DIFFICULTY = Object.freeze({ bulletDensity:1, enemyDensity:1, fastBulletRatio:0, fastBulletSpeed:1.6 });
     const HARDEST_DIFFICULTY = Object.freeze({ bulletDensity:4, enemyDensity:3, fastBulletRatio:.85, fastBulletSpeed:2.4 });
     const PRNG_VERSION = "xorshift32-v1";
+    // Homing missiles launch automatically while a Djev command authorizes the gun.
+    const MISSILE = Object.freeze({ speed:420, turn_rate:6, damage:1, lifetime_s:2.5, launch_interval_s:.5, max_active:4, box:{ w:8, h:14 } });
+    // Each bomb destroys every enemy bullet and enemy ship within the radius; Djev decides when.
+    const BOMB = Object.freeze({ charges:3, radius_px:200 });
+    const BOMB_IDS = Object.freeze(["hold","detonate"]);
     const RULES = Object.freeze({
       arena:{ width:WIDTH, height:HEIGHT },
       dt_ms:DT_MS,
@@ -172,6 +179,9 @@
       leases_ticks:LEASE_TICKS,
       action_ids:ACTION_IDS,
       fire_ids:FIRE_IDS,
+      bomb_ids:BOMB_IDS,
+      missile:MISSILE,
+      bomb:BOMB,
       prng:PRNG_VERSION,
     });
 
@@ -313,6 +323,9 @@
         score: 0,
         player: { x: PLAYER_START_X, y: PLAYER_START_Y, w: PLAYER_W, h: PLAYER_H, lives: 3, maxLives: 3, cooldown_s: 0, invincible_s: 0 },
         playerBullets: [],
+        playerMissiles: [],
+        missileClock_s: 0,
+        bomb: { charges:BOMB.charges, last_decision_id:null },
         enemyBullets: [],
         enemies: [],
         events: [],
@@ -333,6 +346,12 @@
           enemiesDestroyed: 0,
           wavesStarted: 0,
           safetyOverrides: 0,
+          missileLaunches: 0,
+          missileHits: 0,
+          missileKills: 0,
+          bombsUsed: 0,
+          bombBulletsCleared: 0,
+          bombEnemiesDestroyed: 0,
         },
       };
       startWave(game);
@@ -774,6 +793,13 @@
           remaining_ms: rounded(Math.max(0, activeCommand.remaining_ms || 0)),
         } : null,
         enemy_fire_in_ms: rounded(Math.max(0, game.enemyFireClock_s) * 1000),
+        bomb: {
+          charges: game.bomb.charges,
+          radius_px: BOMB.radius_px,
+          bullets_in_radius: game.enemyBullets.filter((b) => Math.hypot(b.x - game.player.x, b.y - game.player.y) <= BOMB.radius_px).length,
+          enemies_in_radius: game.enemies.filter((e) => Math.hypot(e.x - game.player.x, e.y - game.player.y) <= BOMB.radius_px).length,
+        },
+        missiles_active: game.playerMissiles.length,
         threat_counts: { bullets:game.enemyBullets.length, enemies:game.enemies.length, shown:nearest.length },
         nearest_threats: nearest,
         recent_commands: (context.recent_commands || []).slice(-6).map((span) => ({
@@ -866,6 +892,127 @@
       }
     }
 
+    function enemyScoreValue(enemy) {
+      return enemy.type === "tank" ? 80 : enemy.type === "swarm" ? 12 : 28;
+    }
+
+    function destroyEnemyAt(game, index, events, source) {
+      const enemy = game.enemies[index];
+      game.score += enemyScoreValue(enemy);
+      game.counters.enemiesDestroyed += 1;
+      events.push({ type:"enemy_destroyed", tick:game.tick, enemy_id:enemy.id, enemy_type:enemy.type, score:game.score, source });
+      game.enemies.splice(index, 1);
+    }
+
+    // Smallest positive time for a projectile at speed from origin to meet a constant-velocity target.
+    function interceptTime(origin, speed, target) {
+      const dx = target.x - origin.x;
+      const dy = target.y - origin.y;
+      const a = target.vx * target.vx + target.vy * target.vy - speed * speed;
+      const b = 2 * (dx * target.vx + dy * target.vy);
+      const c = dx * dx + dy * dy;
+      if (Math.abs(a) < 1e-9) return b < 0 ? -c / b : null;
+      const disc = b * b - 4 * a * c;
+      if (disc < 0) return null;
+      const root = Math.sqrt(disc);
+      const times = [(-b - root) / (2 * a), (-b + root) / (2 * a)].filter((t) => t > 0);
+      return times.length ? Math.min(...times) : null;
+    }
+
+    function missileTarget(game, origin) {
+      let best = null;
+      for (const enemy of game.enemies) {
+        const v = enemyVelocity(game, enemy);
+        const t = interceptTime(origin, MISSILE.speed, { x:enemy.x, y:enemy.y, vx:v.vx, vy:v.vy }) ?? Math.hypot(enemy.x - origin.x, enemy.y - origin.y) / MISSILE.speed;
+        if (!best || t < best.t || t === best.t && String(enemy.id) < String(best.enemy.id)) best = { enemy, t, v };
+      }
+      return best;
+    }
+
+    function launchMissile(game, command, events) {
+      if (!command || command.fire !== "shoot" || !game.enemies.length) return;
+      if (game.missileClock_s > 0 || game.playerMissiles.length >= MISSILE.max_active) return;
+      const origin = { x:game.player.x, y:game.player.y - 12 };
+      const target = missileTarget(game, origin);
+      const missile = { id:entityId(game, "missile"), x:origin.x, y:origin.y, heading:-Math.PI / 2, age_s:0, target_id:target.enemy.id, decision_id:command.decision_id ?? null };
+      game.playerMissiles.push(missile);
+      game.missileClock_s = MISSILE.launch_interval_s;
+      game.counters.missileLaunches += 1;
+      events.push({ type:"missile_launch", tick:game.tick, missile_id:missile.id, target_id:missile.target_id, decision_id:missile.decision_id });
+    }
+
+    // Guidance is weapon physics: steer toward the target's predicted intercept at a bounded turn rate.
+    function updateMissiles(game, events) {
+      const maxTurn = MISSILE.turn_rate * DT_SECONDS;
+      game.playerMissiles = game.playerMissiles.filter((missile) => {
+        missile.age_s += DT_SECONDS;
+        if (missile.age_s >= MISSILE.lifetime_s) {
+          events.push({ type:"missile_expired", tick:game.tick, missile_id:missile.id });
+          return false;
+        }
+        let target = game.enemies.find((enemy) => enemy.id === missile.target_id);
+        if (!target && game.enemies.length) {
+          target = missileTarget(game, missile).enemy;
+          missile.target_id = target.id;
+          events.push({ type:"missile_retarget", tick:game.tick, missile_id:missile.id, target_id:target.id });
+        }
+        if (target) {
+          const v = enemyVelocity(game, target);
+          const t = interceptTime(missile, MISSILE.speed, { x:target.x, y:target.y, vx:v.vx, vy:v.vy }) ?? 0;
+          const desired = Math.atan2(target.y + v.vy * t - missile.y, target.x + v.vx * t - missile.x);
+          let turn = desired - missile.heading;
+          turn = Math.atan2(Math.sin(turn), Math.cos(turn));
+          missile.heading += clamp(turn, -maxTurn, maxTurn);
+        }
+        missile.x += Math.cos(missile.heading) * MISSILE.speed * DT_SECONDS;
+        missile.y += Math.sin(missile.heading) * MISSILE.speed * DT_SECONDS;
+        return missile.x > -40 && missile.x < WIDTH + 40 && missile.y > -60 && missile.y < HEIGHT + 40;
+      });
+    }
+
+    function resolveMissileHits(game, events) {
+      for (let i = game.playerMissiles.length - 1; i >= 0; i -= 1) {
+        const missile = game.playerMissiles[i];
+        const index = game.enemies.findIndex((enemy) => overlaps({ x:missile.x, y:missile.y, w:MISSILE.box.w, h:MISSILE.box.h }, enemy));
+        if (index < 0) continue;
+        const enemy = game.enemies[index];
+        game.playerMissiles.splice(i, 1);
+        enemy.hp -= MISSILE.damage;
+        game.counters.missileHits += 1;
+        events.push({ type:"missile_hit", tick:game.tick, missile_id:missile.id, enemy_id:enemy.id, hp:enemy.hp, decision_id:missile.decision_id });
+        if (enemy.hp <= 0) {
+          game.counters.missileKills += 1;
+          destroyEnemyAt(game, index, events, "missile");
+        }
+      }
+    }
+
+    // A bomb is one-shot per Djev decision: the decision id guards against re-detonating across its lease.
+    function detonateBomb(game, command, events) {
+      if (!command || command.bomb !== "detonate" || !command.decision_id || game.bomb.last_decision_id === command.decision_id) return;
+      game.bomb.last_decision_id = command.decision_id;
+      if (game.bomb.charges <= 0) {
+        events.push({ type:"bomb_unavailable", tick:game.tick, decision_id:command.decision_id });
+        return;
+      }
+      const center = { x:game.player.x, y:game.player.y };
+      const inRange = (thing) => Math.hypot(thing.x - center.x, thing.y - center.y) <= BOMB.radius_px;
+      const removedBullets = game.enemyBullets.filter(inRange).map((bullet) => bullet.id);
+      game.enemyBullets = game.enemyBullets.filter((bullet) => !inRange(bullet));
+      const destroyedEnemies = [];
+      for (let i = game.enemies.length - 1; i >= 0; i -= 1) {
+        if (!inRange(game.enemies[i])) continue;
+        destroyedEnemies.push(game.enemies[i].id);
+        destroyEnemyAt(game, i, events, "bomb");
+      }
+      const before = game.bomb.charges;
+      game.bomb.charges -= 1;
+      game.counters.bombsUsed += 1;
+      game.counters.bombBulletsCleared += removedBullets.length;
+      game.counters.bombEnemiesDestroyed += destroyedEnemies.length;
+      events.push({ type:"bomb_detonated", tick:game.tick, decision_id:command.decision_id, x:center.x, y:center.y, radius_px:BOMB.radius_px, charges_before:before, charges_after:game.bomb.charges, removed_bullet_ids:removedBullets, destroyed_enemy_ids:destroyedEnemies.reverse() });
+    }
+
     function hitPlayer(game, source, command, events) {
       const before = game.player.lives;
       if (game.player.invincible_s > 0) {
@@ -891,6 +1038,7 @@
       const command = commandOrNull || null;
       const movement = command ? command.movement : "hold";
       const fire = command ? command.fire : "cease";
+      detonateBomb(game, command, events);
       const arena = arenaFor(game);
       const beforePlayer = { x:game.player.x, y:game.player.y };
       const moved = movePoint(beforePlayer, movement, arena);
@@ -902,12 +1050,15 @@
       }
       game.player.cooldown_s -= DT_SECONDS;
       if (fire === "shoot" && game.player.cooldown_s <= 0 && command) emitPlayerShot(game, command, events);
+      game.missileClock_s = Math.max(0, game.missileClock_s - DT_SECONDS);
+      launchMissile(game, command, events);
       if (game.player.invincible_s > 0) game.player.invincible_s = Math.max(0, game.player.invincible_s - DT_SECONDS);
 
       game.playerBullets = game.playerBullets.filter((shot) => {
         shot.y += shot.vy * DT_SECONDS;
         return shot.y > -15;
       });
+      updateMissiles(game, events);
 
       game.enemyBullets = game.enemyBullets.filter((enemyShot) => {
         enemyShot.x += enemyShot.vx * DT_SECONDS;
@@ -936,16 +1087,12 @@
             game.playerBullets.splice(i, 1);
             enemy.hp -= 1;
             events.push({ type:"enemy_damaged", tick:game.tick, enemy_id:enemy.id, shot_id:shot.id, hp:enemy.hp, decision_id:shot.authorizedBy && shot.authorizedBy.decision_id });
-            if (enemy.hp <= 0) {
-              game.score += enemy.type === "tank" ? 80 : enemy.type === "swarm" ? 12 : 28;
-              game.counters.enemiesDestroyed += 1;
-              events.push({ type:"enemy_destroyed", tick:game.tick, enemy_id:enemy.id, enemy_type:enemy.type, score:game.score });
-              game.enemies.splice(j, 1);
-            }
+            if (enemy.hp <= 0) destroyEnemyAt(game, j, events, "gun");
             break;
           }
         }
       }
+      resolveMissileHits(game, events);
 
       game.enemyFireClock_s -= DT_SECONDS;
       if (game.enemyFireClock_s <= 0 && game.enemies.length) {
@@ -1139,6 +1286,9 @@
         score: game.score,
         player: game.player,
         playerBullets: game.playerBullets,
+        playerMissiles: game.playerMissiles,
+        missileClock_s: game.missileClock_s,
+        bomb: game.bomb,
         enemyBullets: game.enemyBullets,
         enemies: game.enemies,
         terminal: game.terminal,
@@ -1182,6 +1332,8 @@
         lives: game.player.lives,
         wave: game.wave,
         score: game.score,
+        bomb_charges: game.bomb.charges,
+        active_missiles: game.playerMissiles.length,
         game_over: Boolean(game.terminal),
         counters: clone(game.counters),
       };
@@ -1192,7 +1344,7 @@
     }
 
     globalThis.SpaceDecisionCore = Object.freeze({
-      ENGINE_VERSION, DT_MS, ACTION_IDS, FIRE_IDS, LEASE_TICKS, LEASE_MS, RULES, DEFAULT_DIFFICULTY, HARDEST_DIFFICULTY,
+      ENGINE_VERSION, DT_MS, ACTION_IDS, FIRE_IDS, BOMB_IDS, MISSILE, BOMB, LEASE_TICKS, LEASE_MS, RULES, DEFAULT_DIFFICULTY, HARDEST_DIFFICULTY,
       createGame, stepGame, coordinateAction, stepPolicyTick, observeGame, serializeGame, restoreGame, hashGame, gameStatus,
       normalizeDifficulty, arenaFor, velocityFor, waveProfile, baseEnemyCountForWave, enemyCountForWave,
       fireIntervalForDifficulty, bulletSpeedForDifficulty, rulesManifest,
@@ -1207,11 +1359,12 @@
 
     const CONTROLLER_VERSION = "space-djev-controller-v2";
     const SCHEMA_VERSION = 1;
-    const PROMPT_VERSION = "djev-authoritative-v3";
-    const CONTEXT_VERSION = "djev-observation-v3";
+    const PROMPT_VERSION = "djev-authoritative-v4";
+    const CONTEXT_VERSION = "djev-observation-v4";
     const MAX_RESPONSE_AGE_MS = 600;
     const ACTION_IDS = globalThis.SpaceDecisionCore.ACTION_IDS;
     const FIRE_IDS = globalThis.SpaceDecisionCore.FIRE_IDS;
+    const BOMB_IDS = globalThis.SpaceDecisionCore.BOMB_IDS;
     const LEASE_TICKS = globalThis.SpaceDecisionCore.LEASE_TICKS;
     const DT_MS = globalThis.SpaceDecisionCore.DT_MS;
     const INTENT_IDS = Object.freeze(["evade", "recover", "position"]);
@@ -1227,7 +1380,8 @@
       down_left:"Move diagonally down-left at normalized 112 px/s",
       down_right:"Move diagonally down-right at normalized 112 px/s",
     });
-    const FIRE_DESCRIPTIONS = Object.freeze({ shoot:"Enable the normal weapon during this lease", cease:"Do not emit new player shots during this lease" });
+    const FIRE_DESCRIPTIONS = Object.freeze({ shoot:"Enable the gun and homing missiles during this lease", cease:"Do not emit new player shots or missiles during this lease" });
+    const BOMB_DESCRIPTIONS = Object.freeze({ hold:"Keep the bomb charge", detonate:"Destroy every enemy bullet and ship near the player now" });
     const PATH_DESCRIPTIONS = Object.freeze(Object.fromEntries(ACTION_IDS.map((id) => [`${id}__medium`, `${MOVEMENT_DESCRIPTIONS[id]}; authorize at most 30 ticks / 500 ms`])));
     const INTENT_DESCRIPTIONS = Object.freeze({ evade:"Evade current danger", recover:"Recover maneuvering room", position:"Position for subsequent movement and fire" });
 
@@ -1305,6 +1459,7 @@
           path: packQuestion(PATH_DESCRIPTIONS),
           fire: packQuestion(questionCriteria(FIRE_IDS, FIRE_DESCRIPTIONS)),
           intent: packQuestion(questionCriteria(INTENT_IDS, INTENT_DESCRIPTIONS)),
+          bomb: packQuestion(questionCriteria(BOMB_IDS, BOMB_DESCRIPTIONS)),
         },
         samples: 1,
         prompt_version: PROMPT_VERSION,
@@ -1328,6 +1483,7 @@
       if (!FIRE_IDS.includes(reply.fire)) return { ok:false, reason:"unknown_fire", age_ms:age, current:true };
       if (!Object.hasOwn(LEASE_TICKS, reply.lease)) return { ok:false, reason:"unknown_lease", age_ms:age, current:true };
       if (!INTENT_IDS.includes(reply.intent)) return { ok:false, reason:"unknown_intent", age_ms:age, current:true };
+      if (reply.bomb != null && !BOMB_IDS.includes(reply.bomb)) return { ok:false, reason:"unknown_bomb", age_ms:age, current:true };
       return { ok:true, age_ms:age, tick };
     }
 
@@ -1348,6 +1504,7 @@
         fire: reply.fire,
         lease: reply.lease,
         intent: reply.intent,
+        bomb: reply.bomb ?? "hold",
         sent_wall_ms: pending.wall_ms,
         received_wall_ms: wall_ms,
         confidence: reply.confidence || {},
@@ -1355,7 +1512,7 @@
       controller.queued = { decision };
       controller.lastAcceptedSequence = reply.sequence;
       controller.counters.accepted += 1;
-      events.push({ type:"response_received", tick, wall_ms, sequence:reply.sequence, decision_id:decision.decision_id, movement:decision.movement, fire:decision.fire, lease:decision.lease, intent:decision.intent, confidence:{ ...decision.confidence }, age_ms:validation.age_ms });
+      events.push({ type:"response_received", tick, wall_ms, sequence:reply.sequence, decision_id:decision.decision_id, movement:decision.movement, fire:decision.fire, lease:decision.lease, intent:decision.intent, bomb:decision.bomb, confidence:{ ...decision.confidence }, age_ms:validation.age_ms });
       return { events };
     }
 
@@ -1403,6 +1560,7 @@
             fire: decision.fire,
             lease: decision.lease,
             intent: decision.intent,
+            bomb: decision.bomb,
             confidence: { ...decision.confidence },
             start_tick: tick,
             end_tick: tick + ticks,
@@ -1457,7 +1615,7 @@
     }
 
     globalThis.SpaceDjevController = Object.freeze({
-      CONTROLLER_VERSION, SCHEMA_VERSION, PROMPT_VERSION, CONTEXT_VERSION, MAX_RESPONSE_AGE_MS, INTENT_IDS,
+      CONTROLLER_VERSION, SCHEMA_VERSION, PROMPT_VERSION, CONTEXT_VERSION, MAX_RESPONSE_AGE_MS, INTENT_IDS, BOMB_IDS,
       createController, beginDecision, receiveDecision, commandForTick, finishDecision, invalidateController,
       latencyStats,
     });
@@ -1511,6 +1669,7 @@
     let completionEvents = [];
     let lastApi = { latency_ms:null, api_token_throughput:null, usage:{ input_tokens:null, output_tokens:null } };
     let lastSelected = "none";
+    let bombFlash = null;
     let lastExecuted = "neutral · hold · cease";
     let nextRequestAllowedWallMs = 0;
     let difficulty = core.normalizeDifficulty({});
@@ -1724,6 +1883,10 @@
 
     function updateRecentFromEvents(events) {
       for (const event of events) {
+        if (event.type === "bomb_detonated") {
+          bombFlash = { x:event.x, y:event.y, radius:event.radius_px, until:performance.now() + 450 };
+          addHistory("bomb", `djev bomb · ${event.removed_bullet_ids.length} bullets · ${event.destroyed_enemy_ids.length} ships · ${event.charges_after} left`, "ok");
+        }
         if (event.type === "command_applied") {
           pushRecentCommand({ movement:event.command.movement, fire:event.command.fire, lease:event.command.lease, intent:event.command.intent, elapsed_ms:0, dx:0, dy:0, source:"djev", sequence:event.command.sequence, start_tick:event.command.start_tick });
           lastSelected = `${event.command.movement} · ${event.command.fire} · ${event.command.lease} · ${modelIntentText(event.command)} · S${event.command.sequence}`;
@@ -1994,6 +2157,8 @@
       $("hud-run").textContent = runId || "starting";
       $("hud-elapsed").textContent = (game.sim_ms / 1000).toFixed(1) + " s";
       $("hud-mode").textContent = game.terminal ? "ENDED" : paused ? "PAUSED" : autopilot ? "AUTO" : "MANUAL";
+      $("hud-bombs").textContent = "●".repeat(game.bomb.charges) + "○".repeat(Math.max(0, core.BOMB.charges - game.bomb.charges));
+      $("hud-missiles").textContent = `${game.playerMissiles.length} · ${game.counters.missileKills} kills`;
       $("selected").textContent = lastSelected;
       $("executed").textContent = currentExecutingText();
       $("request-status").textContent = controller.pending ? `pending · E${controller.epoch}/S${controller.pending.sequence}` : `idle · E${controller.epoch}`;
@@ -2035,6 +2200,23 @@
       for (let y = 0; y < H; y += 80) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
       game.playerBullets.forEach((shot) => { ctx.fillStyle = "#e8f1ff"; ctx.beginPath(); ctx.arc(shot.x, shot.y, shot.radius, 0, Math.PI * 2); ctx.fill(); });
       game.enemyBullets.forEach((shot) => { ctx.fillStyle = shot.fast ? "#ffffff" : shot.sweep ? "#ffc86b" : "#ff7086"; ctx.beginPath(); ctx.arc(shot.x, shot.y, shot.radius, 0, Math.PI * 2); ctx.fill(); if (shot.fast) { ctx.strokeStyle = "#5ce1e6"; ctx.stroke(); } });
+      game.playerMissiles.forEach((missile) => {
+        ctx.save();
+        ctx.translate(missile.x, missile.y);
+        ctx.rotate(missile.heading + Math.PI / 2);
+        ctx.fillStyle = "#ffb454";
+        ctx.beginPath(); ctx.moveTo(0, -7); ctx.lineTo(3.5, 5); ctx.lineTo(-3.5, 5); ctx.closePath(); ctx.fill();
+        ctx.fillStyle = "rgba(255,120,60,.7)"; ctx.fillRect(-1.5, 5, 3, 5);
+        ctx.restore();
+      });
+      if (bombFlash && performance.now() < bombFlash.until) {
+        const left = (bombFlash.until - performance.now()) / 450;
+        ctx.strokeStyle = `rgba(255,220,120,${left.toFixed(2)})`;
+        ctx.lineWidth = 3;
+        ctx.beginPath(); ctx.arc(bombFlash.x, bombFlash.y, bombFlash.radius * (1.15 - left * .15), 0, Math.PI * 2); ctx.stroke();
+        ctx.fillStyle = `rgba(255,220,120,${(left * .18).toFixed(3)})`; ctx.fill();
+        ctx.lineWidth = 1;
+      }
       game.enemies.forEach((enemy) => { ctx.save(); ctx.translate(enemy.x, enemy.y); ctx.fillStyle = enemy.type === "tank" ? "#ffc86b" : enemy.type === "swarm" ? "#c47bff" : "#6e8cff"; ctx.fillRect(-enemy.w / 2, -enemy.h / 2, enemy.w, enemy.h); ctx.restore(); });
       if (!(game.player.invincible_s > 0 && Math.floor(game.player.invincible_s * 12) % 2 === 0)) {
         ctx.save();

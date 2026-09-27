@@ -317,7 +317,7 @@ func (s *Server) StartRun(body any) (map[string]any, error) {
 func nullDecision(request *DecisionRequest, id string, apiOK bool, errText string, latencyMs float64) map[string]any {
 	return map[string]any{
 		"schema_version": SchemaVersion, "run_id": request.RunID, "epoch": request.Epoch, "sequence": request.Sequence,
-		"decision_id": id, "intent": nil, "movement": nil, "fire": nil, "lease": nil,
+		"decision_id": id, "intent": nil, "movement": nil, "fire": nil, "lease": nil, "bomb": nil,
 		"valid_choice": false, "api_ok": apiOK, "error": errText, "latency_ms": round(latencyMs, 1),
 		"usage":      map[string]any{"input_tokens": nil, "output_tokens": nil},
 		"confidence": nullConfidence(), "api_token_throughput": nil,
@@ -355,10 +355,14 @@ func (s *Server) HandleDecision(ctx context.Context, body any) (map[string]any, 
 	receivedMono := s.monotonicMs()
 	tokenBudget := map[string]any{"packed_state_chars": nil, "tokenizer": "unavailable", "max_model_len": MaxModelLen, "reserved_output_tokens": ReservedOutputTokens}
 
-	criteria, err := buildPathCriteria(request)
+	criteria, bestTier, err := buildPathCriteria(request)
 	var packed *OrderedMap
+	var bomb BombFacts
 	if err == nil {
 		packed, err = packModelContext(request)
+	}
+	if err == nil {
+		bomb, err = bombFacts(request.State["bomb"])
 	}
 	if err != nil {
 		var budget *ContextBudgetExceeded
@@ -386,7 +390,7 @@ func (s *Server) HandleDecision(ctx context.Context, body any) (map[string]any, 
 	}
 
 	identity := run.identity()
-	payload := buildUpstreamPayload(fmt.Sprint(identity["configured_model"]), run.PromptText, packed, criteria)
+	payload := buildUpstreamPayload(fmt.Sprint(identity["configured_model"]), run.PromptText, packed, criteria, buildBombCriteria(bomb, bestTier))
 	// The exact wire bytes are logged before transport and reused for the request itself.
 	wire, err := marshalCompact(payload)
 	if err != nil {
@@ -448,7 +452,7 @@ func (s *Server) HandleDecision(ctx context.Context, body any) (map[string]any, 
 		} else if upstream.Status != nil {
 			errText = fmt.Sprintf("upstream_status_%d", *upstream.Status)
 		}
-		normalized = map[string]any{"intent": nil, "movement": nil, "fire": nil, "lease": nil, "valid_choice": false, "confidence": nullConfidence(), "error": errText}
+		normalized = map[string]any{"intent": nil, "movement": nil, "fire": nil, "lease": nil, "bomb": nil, "valid_choice": false, "confidence": nullConfidence(), "error": errText}
 	}
 	if parsed, ok := upstream.Parsed.(map[string]any); ok {
 		if model, ok := parsed["model"].(string); ok {
@@ -465,7 +469,7 @@ func (s *Server) HandleDecision(ctx context.Context, body any) (map[string]any, 
 	result := map[string]any{
 		"schema_version": SchemaVersion, "run_id": run.RunID, "epoch": request.Epoch, "sequence": request.Sequence,
 		"decision_id": id, "intent": normalized["intent"], "movement": normalized["movement"],
-		"fire": normalized["fire"], "lease": normalized["lease"], "valid_choice": normalized["valid_choice"],
+		"fire": normalized["fire"], "lease": normalized["lease"], "bomb": normalized["bomb"], "valid_choice": normalized["valid_choice"],
 		"api_ok": apiOK, "error": normalized["error"], "latency_ms": round(upstream.ElapsedS*1000, 1),
 		"usage": usage, "confidence": normalized["confidence"], "api_token_throughput": throughput,
 	}

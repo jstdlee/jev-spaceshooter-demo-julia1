@@ -7,8 +7,8 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { performance } = require('node:perf_hooks');
 
-const PROMPT_VERSION = 'djev-authoritative-v3';
-const CONTEXT_VERSION = 'djev-observation-v3';
+const PROMPT_VERSION = 'djev-authoritative-v4';
+const CONTEXT_VERSION = 'djev-observation-v4';
 const SCHEMA_VERSION = 1;
 const DT_MS = 1000 / 60;
 const STALE_RESPONSE_MS = 600;
@@ -20,7 +20,7 @@ const REPLAY_NUMERIC_TOLERANCE = 1e-9;
 // Configuration, RNG state, counters, ticks, IDs and other values stay exact.
 const REPLAY_CONTINUOUS_FIELDS = new Set([
   'x', 'y', 'vx', 'vy', 'phase', 'cooldown_s', 'invincible_s',
-  'waveClock_s', 'enemyFireClock_s', 'sim_ms',
+  'waveClock_s', 'enemyFireClock_s', 'sim_ms', 'heading', 'age_s', 'missileClock_s',
 ]);
 
 const HARDEST_PROFILE = Object.freeze({
@@ -911,6 +911,7 @@ function commandFromPayload(payload) {
     fire: command.fire,
     lease: command.lease,
     ...(command.intent === undefined ? {} : { intent: command.intent }),
+    ...(command.bomb === undefined ? {} : { bomb: command.bomb }),
     start_tick: command.start_tick,
     end_tick: command.end_tick,
     actual_end_tick: command.actual_end_tick ?? command.end_tick,
@@ -1432,6 +1433,7 @@ async function runLiveBenchmark(options) {
           fire: command.fire,
           lease: command.lease,
           ...(command.intent != null ? { intent: command.intent } : {}),
+          ...(command.bomb != null ? { bomb: command.bomb } : {}),
           start_tick: command.start_tick,
           end_tick: command.end_tick,
           applied_wall_ms: command.applied_wall_ms,

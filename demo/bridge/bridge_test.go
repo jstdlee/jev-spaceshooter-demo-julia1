@@ -125,6 +125,7 @@ func decisionBody(t *testing.T, runID string) map[string]any {
 			"player":{"x":480.12,"y":408.34,"w":20,"h":18,"lives":3,"cooldown_ms":40.25,"invulnerability_ms":0},
 			"active_command":{"decision_id":"old-decision","sequence":3,"movement":"up","fire":"shoot","lease":"short","remaining_ms":83.34,"intent":"evade"},
 			"last_intent":"recover","enemy_fire_in_ms":155.5,
+			"bomb":{"charges":3,"radius_px":200,"bullets_in_radius":4,"enemies_in_radius":1},"missiles_active":2,
 			"threat_counts":{"enemies":6,"enemy_bullets":11,"nearest_threats_total":17},
 			"nearest_threats":[{"kind":"bullet","x":500,"y":320,"vx":0,"vy":405.25,"w":8,"h":8}],
 			"recent_commands":[{"movement":"left","fire":"cease","lease":"medium","elapsed_ms":500,"dx":-56,"dy":0,"source":"djev"}],
@@ -263,7 +264,7 @@ func TestCenterProgressAndNullGapLabels(t *testing.T) {
 		if packed.Get("hold_gap_px") != nil {
 			t.Fatal("hold_gap_px must be null")
 		}
-		criteria, err := buildPathCriteria(request)
+		criteria, _, err := buildPathCriteria(request)
 		must(t, err)
 		want := "Tier 2 OK: 6/9 escapes, open gap, near enemy, busy space, stationary"
 		if tc.toward {
@@ -316,7 +317,7 @@ func TestHoldCollisionAndMoveContactLabels(t *testing.T) {
 		if packed.Get("hold_collision") != (contact != nil) {
 			t.Fatalf("hold_collision for %v", contact)
 		}
-		criteria, err := buildPathCriteria(request)
+		criteria, _, err := buildPathCriteria(request)
 		must(t, err)
 		if criteria.Keys()[0] != "hold__medium" {
 			t.Fatal("criteria must keep fixed movement order")
@@ -342,7 +343,7 @@ func TestAllCollidingPathsKeepFixedOrder(t *testing.T) {
 		medium(body, i)["clearance_px"] = json.Number("-0.25")
 	}
 	request := requestFor(t, body)
-	criteria, err := buildPathCriteria(request)
+	criteria, _, err := buildPathCriteria(request)
 	must(t, err)
 	if !reflect.DeepEqual(criteria.Keys(), PathIDs) {
 		t.Fatalf("keys %v", criteria.Keys())
@@ -376,12 +377,37 @@ func TestPathTiersRankContactEscapesWallsGapsAndEnemyDistance(t *testing.T) {
 		for key, value := range decode(t, tc.update) {
 			medium(body, 0)[key] = value
 		}
-		criteria, err := buildPathCriteria(requestFor(t, body))
+		criteria, _, err := buildPathCriteria(requestFor(t, body))
 		must(t, err)
 		if criteria.Get("hold__medium") != tc.want {
 			t.Fatalf("%s: got %q", tc.update, criteria.Get("hold__medium"))
 		}
 	}
+}
+
+func TestBombCriteriaStateFactsAndUrgency(t *testing.T) {
+	urgent := buildBombCriteria(BombFacts{Charges: 1, RadiusPx: 200, Bullets: 7, Enemies: 0}, 6)
+	if urgent.Get("detonate") != "Destroys 7 bullets and 0 enemy ships within 200 px; 0 charges left after. Every move is tier 5 or 6 right now." {
+		t.Fatalf("%q", urgent.Get("detonate"))
+	}
+	if !reflect.DeepEqual(urgent.Keys(), BombIDs) {
+		t.Fatalf("bomb choice order %v", urgent.Keys())
+	}
+	empty := buildBombCriteria(BombFacts{Charges: 0, RadiusPx: 200, Bullets: 7}, 6)
+	if empty.Get("detonate") != "No charges left; detonating does nothing." {
+		t.Fatalf("%q", empty.Get("detonate"))
+	}
+	if oracleBomb(map[string]any{"detonate": urgent.Get("detonate")}) != "detonate" || oracleBomb(map[string]any{"detonate": empty.Get("detonate")}) != "hold" {
+		t.Fatal("oracle must follow the bomb rule")
+	}
+	calm := buildBombCriteria(BombFacts{Charges: 2, RadiusPx: 200, Bullets: 3, Enemies: 1}, 2)
+	if oracleBomb(map[string]any{"detonate": calm.Get("detonate")}) != "hold" {
+		t.Fatal("oracle must hold while a safe move exists")
+	}
+	body := decisionBody(t, "bomb")
+	delete(body["state"].(map[string]any), "bomb")
+	_, err := packModelContext(requestFor(t, body))
+	expectAPIError(t, err, 400)
 }
 
 func TestMotionRelativeToExecutingCommand(t *testing.T) {
@@ -454,16 +480,19 @@ func TestNormalizationPreservesEveryCombination(t *testing.T) {
 	for _, intent := range IntentIDs {
 		for _, movement := range ActionIDs {
 			for _, fire := range FireIDs {
-				response := decode(t, fmt.Sprintf(`{"answers":{"intent":{"choice":%q,"confidence":0.65},"path":{"choice":"%s__medium","confidence":0.75},"fire":{"choice":%q,"confidence":0.85}}}`, intent, movement, fire))
+				response := decode(t, fmt.Sprintf(`{"answers":{"intent":{"choice":%q,"confidence":0.65},"path":{"choice":"%s__medium","confidence":0.75},"fire":{"choice":%q,"confidence":0.85},"bomb":{"choice":"detonate","confidence":0.95}}}`, intent, movement, fire))
 				result := normalizeDecisionResponse(response)
 				if result["valid_choice"] != true || result["intent"] != intent || result["movement"] != movement || result["fire"] != fire || result["lease"] != "medium" {
 					t.Fatalf("normalized %v", result)
 				}
-				assertJSON(t, result["confidence"], map[string]any{"intent": 0.65, "path": 0.75, "movement": 0.75, "fire": 0.85, "lease": 0.75})
+				assertJSON(t, result["confidence"], map[string]any{"intent": 0.65, "path": 0.75, "movement": 0.75, "fire": 0.85, "lease": 0.75, "bomb": 0.95})
+				if result["bomb"] != "detonate" {
+					t.Fatalf("bomb %v", result["bomb"])
+				}
 			}
 		}
 	}
-	result := normalizeDecisionResponse(decode(t, `{"answers":{"intent":{"choice":"evade"},"path":{"choice":"left__short"},"fire":{"choice":"shoot"}}}`))
+	result := normalizeDecisionResponse(decode(t, `{"answers":{"intent":{"choice":"evade"},"path":{"choice":"left__short"},"fire":{"choice":"shoot"},"bomb":{"choice":"hold","confidence":0.9}}}`))
 	if result["valid_choice"] != false || !strings.Contains(result["error"].(string), "unknown_path_choice") {
 		t.Fatalf("short path must be invalid: %v", result)
 	}
@@ -481,7 +510,7 @@ func TestInvalidIntentIsAtomicAndRawLogged(t *testing.T) {
 		if tc.intent != "" {
 			intent = `,"intent":` + tc.intent
 		}
-		raw := `{"model":"dgemma","answers":{"path":{"choice":"left__medium","confidence":0.9},"fire":{"choice":"shoot","confidence":0.8}` + intent + `}}`
+		raw := `{"model":"dgemma","answers":{"path":{"choice":"left__medium","confidence":0.9},"fire":{"choice":"shoot","confidence":0.8},"bomb":{"choice":"hold","confidence":0.9}` + intent + `}}`
 		f.upstream.handle = func([]byte) (*UpstreamResult, error) { return okResult(t, raw, 0.1), nil }
 		body := decisionBody(t, runID)
 		body["sequence"] = json.Number(fmt.Sprint(sequence))
@@ -515,7 +544,7 @@ func TestUpstreamTransportHTTPAndBudgetErrorsReturnNullDecision(t *testing.T) {
 			f.upstream.handle = func([]byte) (*UpstreamResult, error) { return nil, errors.New("TimeoutError: fixture timeout") }
 		default:
 			f.upstream.handle = func([]byte) (*UpstreamResult, error) {
-				result := okResult(t, `{"answers":{"intent":{"choice":"recover"},"path":{"choice":"right__medium"},"fire":{"choice":"shoot"}}}`, 0.1)
+				result := okResult(t, `{"answers":{"intent":{"choice":"recover"},"path":{"choice":"right__medium"},"fire":{"choice":"shoot"},"bomb":{"choice":"hold","confidence":0.9}}}`, 0.1)
 				status, message := 503, "HTTPError: 503"
 				result.Status, result.Error = &status, &message
 				return result, nil
@@ -569,10 +598,10 @@ func TestExactRequestBodyPrecedesTransportAndMatchesWire(t *testing.T) {
 				t.Errorf("request record must precede transport with exact wire body")
 			}
 			sent := decode(t, string(wire))
-			if !reflect.DeepEqual(keysInWireOrder(t, wire, "state"), []string{"player", "inside_center_region", "hold_collision", "wait_ms", "wait_collision_ms", "enemy_count", "hold_gap_px"}) {
+			if !reflect.DeepEqual(keysInWireOrder(t, wire, "state"), []string{"player", "inside_center_region", "hold_collision", "wait_ms", "wait_collision_ms", "enemy_count", "hold_gap_px", "bomb_charges"}) {
 				t.Errorf("state key order %v", keysInWireOrder(t, wire, "state"))
 			}
-			if !reflect.DeepEqual(keysInWireOrder(t, wire, "questions"), []string{"intent", "path", "fire"}) {
+			if !reflect.DeepEqual(keysInWireOrder(t, wire, "questions"), []string{"intent", "path", "fire", "bomb"}) {
 				t.Errorf("question order")
 			}
 			path := sent["questions"].(map[string]any)["path"].(map[string]any)["criteria"].(map[string]any)
@@ -586,7 +615,7 @@ func TestExactRequestBodyPrecedesTransportAndMatchesWire(t *testing.T) {
 				w.WriteHeader(503)
 				w.Write([]byte(`{"error":"fixture failure"}`))
 			default:
-				w.Write([]byte(`{"model":"dgemma","answers":{"intent":{"choice":"recover","confidence":0.9},"path":{"choice":"left__medium","confidence":0.8},"fire":{"choice":"shoot","confidence":0.7}},"usage":{"input_tokens":100,"output_tokens":12}}`))
+				w.Write([]byte(`{"model":"dgemma","answers":{"intent":{"choice":"recover","confidence":0.9},"path":{"choice":"left__medium","confidence":0.8},"fire":{"choice":"shoot","confidence":0.7},"bomb":{"choice":"hold","confidence":0.9}},"usage":{"input_tokens":100,"output_tokens":12}}`))
 			}
 		}))
 		upstream := newHTTPUpstream(djev.URL, apiKey)
@@ -650,7 +679,7 @@ func keysInWireOrder(t *testing.T, wire []byte, field string) []string {
 func TestDecisionSendsCompactContextAndExcludesCheckpoint(t *testing.T) {
 	f := newFixture(t)
 	runID := f.start()
-	raw := `{"model":"dgemma","answers":{"intent":{"choice":"position","confidence":0.6},"path":{"choice":"down_right__medium","confidence":0.7},"fire":{"choice":"shoot","confidence":0.8}},"usage":{"input_tokens":314,"output_tokens":16}}`
+	raw := `{"model":"dgemma","answers":{"intent":{"choice":"position","confidence":0.6},"path":{"choice":"down_right__medium","confidence":0.7},"fire":{"choice":"shoot","confidence":0.8},"bomb":{"choice":"hold","confidence":0.9}},"usage":{"input_tokens":314,"output_tokens":16}}`
 	f.upstream.handle = func([]byte) (*UpstreamResult, error) { return okResult(t, raw, 0.1895), nil }
 	body := decisionBody(t, runID)
 	result, err := f.server.HandleDecision(context.Background(), body)
@@ -660,7 +689,7 @@ func TestDecisionSendsCompactContextAndExcludesCheckpoint(t *testing.T) {
 	}
 	assertJSON(t, result["usage"], map[string]any{"input_tokens": 314, "output_tokens": 16})
 	assertJSON(t, result["api_token_throughput"], round(330/0.1895, 1))
-	assertJSON(t, result["confidence"], map[string]any{"intent": 0.6, "path": 0.7, "movement": 0.7, "fire": 0.8, "lease": 0.7})
+	assertJSON(t, result["confidence"], map[string]any{"intent": 0.6, "path": 0.7, "movement": 0.7, "fire": 0.8, "lease": 0.7, "bomb": 0.9})
 
 	wire := f.upstream.calls[0]
 	payload := decode(t, string(wire))
@@ -679,9 +708,13 @@ func TestDecisionSendsCompactContextAndExcludesCheckpoint(t *testing.T) {
 	}
 	questions := payload["questions"].(map[string]any)
 	assertJSON(t, questions["path"].(map[string]any)["criteria"], want)
-	assertJSON(t, questions["fire"].(map[string]any)["criteria"], map[string]any{"shoot": "Fire weapon.", "cease": "Do not fire."})
+	assertJSON(t, questions["fire"].(map[string]any)["criteria"], map[string]any{"shoot": "Fire gun and homing missiles.", "cease": "Do not fire."})
+	assertJSON(t, questions["bomb"].(map[string]any)["criteria"], map[string]any{
+		"hold":     "Keep 3 charges for later. A tier 2 move exists.",
+		"detonate": "Destroys 4 bullets and 1 enemy ships within 200 px; 2 charges left after. A tier 2 move exists.",
+	})
 	assertJSON(t, payload["state"], decode(t, `{"player":{"x":480.12,"y":408.34,"w":20,"h":18,"lives":3,"cooldown_ms":40.25,"invulnerability_ms":0},
-		"inside_center_region":false,"hold_collision":false,"wait_ms":260,"wait_collision_ms":null,"enemy_count":6,"hold_gap_px":28.75}`))
+		"inside_center_region":false,"hold_collision":false,"wait_ms":260,"wait_collision_ms":null,"enemy_count":6,"hold_gap_px":28.75,"bomb_charges":3}`))
 	for _, forbidden := range []string{"checkpoint", "rng_state", "seed", "old-decision"} {
 		if strings.Contains(string(wire), forbidden) {
 			t.Fatalf("payload leaked %q", forbidden)
@@ -723,7 +756,7 @@ func TestRemovedContextFieldsAreNotRequired(t *testing.T) {
 	f := newFixture(t)
 	runID := f.start()
 	f.upstream.handle = func([]byte) (*UpstreamResult, error) {
-		return okResult(t, `{"answers":{"intent":{"choice":"position"},"path":{"choice":"hold__medium"},"fire":{"choice":"cease"}}}`, 0.1), nil
+		return okResult(t, `{"answers":{"intent":{"choice":"position"},"path":{"choice":"hold__medium"},"fire":{"choice":"cease"},"bomb":{"choice":"hold","confidence":0.9}}}`, 0.1), nil
 	}
 	body := decisionBody(t, runID)
 	state := body["state"].(map[string]any)
@@ -856,7 +889,7 @@ func TestRunEndWaitsForInflightDecision(t *testing.T) {
 	f.upstream.handle = func([]byte) (*UpstreamResult, error) {
 		close(started)
 		<-release
-		return okResult(t, `{"model":"dgemma","answers":{"intent":{"choice":"evade"},"path":{"choice":"up__medium"},"fire":{"choice":"shoot"}}}`, 0.4895), nil
+		return okResult(t, `{"model":"dgemma","answers":{"intent":{"choice":"evade"},"path":{"choice":"up__medium"},"fire":{"choice":"shoot"},"bomb":{"choice":"hold","confidence":0.9}}}`, 0.4895), nil
 	}
 	decisionDone, endDone := make(chan map[string]any, 1), make(chan map[string]any, 1)
 	go func() {

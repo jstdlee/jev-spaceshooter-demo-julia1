@@ -8,8 +8,8 @@ import (
 
 const (
 	SchemaVersion        = 1
-	PromptVersion        = "djev-authoritative-v3"
-	ContextVersion       = "djev-observation-v3"
+	PromptVersion        = "djev-authoritative-v4"
+	ContextVersion       = "djev-observation-v4"
 	MaxModelLen          = 4096
 	ReservedOutputTokens = 512
 	DtMs                 = 1000.0 / 60.0
@@ -22,6 +22,7 @@ var (
 	ActionIDs = []string{"hold", "left", "right", "up", "down", "up_left", "up_right", "down_left", "down_right"}
 	FireIDs   = []string{"shoot", "cease"}
 	IntentIDs = []string{"evade", "recover", "position"}
+	BombIDs   = []string{"hold", "detonate"}
 	PathIDs   = func() []string {
 		ids := make([]string, len(ActionIDs))
 		for i, movement := range ActionIDs {
@@ -29,7 +30,7 @@ var (
 		}
 		return ids
 	}()
-	FireDescriptions   = map[string]string{"shoot": "Fire weapon.", "cease": "Do not fire."}
+	FireDescriptions   = map[string]string{"shoot": "Fire gun and homing missiles.", "cease": "Do not fire."}
 	IntentDescriptions = map[string]string{
 		"evade":    "hold_collision=true.",
 		"recover":  "hold_collision=false and inside_center_region=false.",
@@ -48,15 +49,18 @@ var MaxPackedStateChars = 6000
 var pathTiers = map[string]int{"GOOD": 1, "OK": 2, "RISKY": 3, "TRAP": 4, "DOOMED": 5, "DEADLY": 6}
 
 const (
-	openGapPx         = 40
-	tightGapPx        = 15
-	trapWallRoomPx    = 25
-	nearEnemyPx       = 110
-	goodMinEscapes    = 4
-	okMinEscapes      = 2
-	centerProgressPx  = 15
-	pathInstructions  = "Pick the move that keeps the ship alive. Each move starts with its tier number: 1 is best, 6 is worst. Always pick a move with the lowest tier number present. Within that tier prefer more escapes, then not stationary or reversing, then not near enemy, then open space, then toward center. If every move is tier 6, pick the one hit latest."
-	fireInstructions  = "Choose shoot if enemy_count>0, otherwise cease."
+	openGapPx        = 40
+	tightGapPx       = 15
+	trapWallRoomPx   = 25
+	nearEnemyPx      = 110
+	goodMinEscapes   = 4
+	okMinEscapes     = 2
+	centerProgressPx = 15
+	pathInstructions = "Pick the move that keeps the ship alive. Each move starts with its tier number: 1 is best, 6 is worst. Always pick a move with the lowest tier number present. Within that tier prefer more escapes, then not stationary or reversing, then not near enemy, then open space, then toward center. If every move is tier 6, pick the one hit latest."
+	fireInstructions = "Choose shoot if enemy_count>0, otherwise cease. Shoot also launches homing missiles."
+	bombInstructions = "Detonate only when every move is tier 5 or 6 and the bomb destroys at least one threat. Otherwise hold; charges do not refill."
+	// bombUrgentTier is the best path tier at which the detonate label reports that no safe move exists.
+	bombUrgentTier    = 5
 	intentInstruction = "Classify current intent."
 )
 
@@ -417,24 +421,66 @@ func pathLabel(row PathRow) string {
 	return fmt.Sprintf("%s: %s.", prefix, strings.Join(parts, ", "))
 }
 
-func buildPathCriteria(request *DecisionRequest) (*OrderedMap, error) {
+// buildPathCriteria returns the path labels and the best (lowest) tier among them.
+func buildPathCriteria(request *DecisionRequest) (*OrderedMap, int, error) {
 	current, err := activeMovement(request.State["active_command"])
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	player, err := packPlayer(request.State["player"])
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	rows, err := pathTable(request.Forecast["candidates"], player, current)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	criteria := NewOrderedMap()
+	best := len(pathTiers)
 	for _, row := range rows {
 		criteria.Set(row.Path, pathLabel(row))
+		if tier := pathTiers[pathTier(row)]; tier < best {
+			best = tier
+		}
 	}
-	return criteria, nil
+	return criteria, best, nil
+}
+
+// BombFacts is the validated state.bomb observation.
+type BombFacts struct {
+	Charges, RadiusPx, Bullets, Enemies int64
+}
+
+func bombFacts(value any) (BombFacts, error) {
+	object, err := requireObject(value, "bomb")
+	if err != nil {
+		return BombFacts{}, err
+	}
+	var facts BombFacts
+	for key, target := range map[string]*int64{"charges": &facts.Charges, "radius_px": &facts.RadiusPx, "bullets_in_radius": &facts.Bullets, "enemies_in_radius": &facts.Enemies} {
+		if *target, err = nonnegativeInt(object[key], "bomb."+key); err != nil {
+			return BombFacts{}, err
+		}
+	}
+	return facts, nil
+}
+
+// buildBombCriteria states what detonating would do now and whether any safe move exists.
+func buildBombCriteria(facts BombFacts, bestTier int) *OrderedMap {
+	criteria := NewOrderedMap()
+	if facts.Charges == 0 {
+		criteria.Set("hold", "No charges left.")
+		criteria.Set("detonate", "No charges left; detonating does nothing.")
+		return criteria
+	}
+	urgency := fmt.Sprintf("A tier %d move exists.", bestTier)
+	if bestTier >= bombUrgentTier {
+		urgency = "Every move is tier 5 or 6 right now."
+	}
+	criteria.Set("hold", fmt.Sprintf("Keep %d charges for later. %s", facts.Charges, urgency))
+	criteria.Set("detonate", fmt.Sprintf("Destroys %d bullets and %d enemy ships within %d px; %d charges left after. %s",
+		facts.Bullets, facts.Enemies, facts.RadiusPx, facts.Charges-1, urgency))
+	return criteria
 }
 
 // ContextBudgetExceeded is returned (not raised to HTTP) as a null decision.
@@ -486,6 +532,10 @@ func packModelContext(request *DecisionRequest) (*OrderedMap, error) {
 	if _, err := nonnegativeInt(counts["enemies"], "threat_counts.enemies"); err != nil {
 		return nil, err
 	}
+	bomb, err := bombFacts(request.State["bomb"])
+	if err != nil {
+		return nil, err
+	}
 	packed := NewOrderedMap().
 		Set("player", player.ordered).
 		Set("inside_center_region", player.x >= 360 && player.x <= 600 && player.y >= 230 && player.y <= 390).
@@ -493,7 +543,8 @@ func packModelContext(request *DecisionRequest) (*OrderedMap, error) {
 		Set("wait_ms", waitMs).
 		Set("wait_collision_ms", waitCollision).
 		Set("enemy_count", counts["enemies"]).
-		Set("hold_gap_px", rows[0].GapRaw)
+		Set("hold_gap_px", rows[0].GapRaw).
+		Set("bomb_charges", bomb.Charges)
 	encoded, err := marshalCompact(packed)
 	if err != nil {
 		return nil, err
@@ -512,7 +563,7 @@ func choiceCriteria(ids []string, descriptions map[string]string) *OrderedMap {
 	return criteria
 }
 
-func buildUpstreamPayload(model, promptText string, packed, pathCriteria *OrderedMap) *OrderedMap {
+func buildUpstreamPayload(model, promptText string, packed, pathCriteria, bombCriteria *OrderedMap) *OrderedMap {
 	question := func(instructions string, criteria *OrderedMap) *OrderedMap {
 		return NewOrderedMap().Set("type", "choice").Set("instructions", instructions).Set("criteria", criteria)
 	}
@@ -523,7 +574,8 @@ func buildUpstreamPayload(model, promptText string, packed, pathCriteria *Ordere
 		Set("questions", NewOrderedMap().
 			Set("intent", question(intentInstruction, choiceCriteria(IntentIDs, IntentDescriptions))).
 			Set("path", question(pathInstructions, pathCriteria)).
-			Set("fire", question(fireInstructions, choiceCriteria(FireIDs, FireDescriptions)))).
+			Set("fire", question(fireInstructions, choiceCriteria(FireIDs, FireDescriptions))).
+			Set("bomb", question(bombInstructions, bombCriteria))).
 		Set("samples", 1).
 		Set("steps", 1)
 }
@@ -574,7 +626,7 @@ func extractAnswer(response any, name string, allowed []string) answer {
 }
 
 func nullConfidence() map[string]any {
-	return map[string]any{"intent": nil, "path": nil, "movement": nil, "fire": nil, "lease": nil}
+	return map[string]any{"intent": nil, "path": nil, "movement": nil, "fire": nil, "lease": nil, "bomb": nil}
 }
 
 // normalizeDecisionResponse validates all three answers atomically.
@@ -582,15 +634,16 @@ func normalizeDecisionResponse(response any) map[string]any {
 	intent := extractAnswer(response, "intent", IntentIDs)
 	path := extractAnswer(response, "path", PathIDs)
 	fire := extractAnswer(response, "fire", FireIDs)
+	bomb := extractAnswer(response, "bomb", BombIDs)
 	var errors []string
-	for _, item := range []answer{intent, path, fire} {
+	for _, item := range []answer{intent, path, fire, bomb} {
 		if item.err != "" {
 			errors = append(errors, item.err)
 		}
 	}
 	if len(errors) > 0 {
 		return map[string]any{
-			"intent": nil, "movement": nil, "fire": nil, "lease": nil, "valid_choice": false,
+			"intent": nil, "movement": nil, "fire": nil, "lease": nil, "bomb": nil, "valid_choice": false,
 			"confidence": nullConfidence(), "error": strings.Join(errors, ","),
 		}
 	}
@@ -600,10 +653,11 @@ func normalizeDecisionResponse(response any) map[string]any {
 		"movement":     path.choice[:separator],
 		"fire":         fire.choice,
 		"lease":        path.choice[separator+2:],
+		"bomb":         bomb.choice,
 		"valid_choice": true,
 		"confidence": map[string]any{
 			"intent": intent.confidence, "path": path.confidence, "movement": path.confidence,
-			"fire": fire.confidence, "lease": path.confidence,
+			"fire": fire.confidence, "lease": path.confidence, "bomb": bomb.confidence,
 		},
 		"error": nil,
 	}

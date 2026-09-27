@@ -1,2 +1,2 @@
-version: djev-authoritative-v3
-Pilot the ship. Survive first: keep moving, keep escape routes open, keep distance from enemy ships, and drift toward center only when that gains open space. Right increases x, down increases y. All directions remain available. The game executes your choice exactly and will NOT correct a colliding move.
+version: djev-authoritative-v4
+Pilot the ship. Survive first: keep moving, keep escape routes open, keep distance from enemy ships, and drift toward center only when that gains open space. Right increases x, down increases y. All directions remain available. Shooting also launches homing missiles that thin out the enemies. You have 3 bombs for the whole run; each destroys every bullet and enemy ship near you, so save them for moments with no safe move. The game executes your choice exactly and will NOT correct a colliding move.

@@ -175,6 +175,8 @@ func main() {
 	demoDir := flag.String("demo-dir", findDemoDir(), "directory containing space-shooter.html and strategy.md")
 	host := flag.String("host", envOr("SHOOTER_HOST", "127.0.0.1"), "listen host")
 	port := flag.Int("port", func() int { p, _ := strconv.Atoi(envOr("SHOOTER_PORT", "7862")); return p }(), "listen port")
+	runsDir := flag.String("runs-dir", "", "trace directory (default <demo-dir>/runs)")
+	upstreamMode := flag.String("upstream", "djev", "djev, or oracle for offline label simulation (no model call)")
 	flag.Parse()
 
 	loadEnvFile(filepath.Join(*demoDir, "..", ".env"))
@@ -183,11 +185,23 @@ func main() {
 	cfg := Config{
 		HTMLPath:     filepath.Join(*demoDir, "space-shooter.html"),
 		StrategyPath: filepath.Join(*demoDir, "strategy.md"),
-		RunsDir:      filepath.Join(*demoDir, "runs"),
+		RunsDir:      *runsDir,
 		DjevURL:      djevURL,
 		DjevModel:    envOr("DJEV_MODEL", "jev-latest"),
 	}
-	server := NewServer(cfg, newHTTPUpstream(djevURL, apiKey))
+	if cfg.RunsDir == "" {
+		cfg.RunsDir = filepath.Join(*demoDir, "runs")
+	}
+	var upstream Upstream = newHTTPUpstream(djevURL, apiKey)
+	switch *upstreamMode {
+	case "djev":
+	case "oracle":
+		upstream = oracleUpstream{}
+		cfg.DjevModel = "oracle"
+	default:
+		log.Fatalf("unknown --upstream %q", *upstreamMode)
+	}
+	server := NewServer(cfg, upstream)
 	address := net.JoinHostPort(*host, strconv.Itoa(*port))
 	fmt.Printf("Space shooter: http://%s/\n", address)
 	log.Fatal(http.ListenAndServe(address, server.Handler()))

@@ -139,6 +139,13 @@ The forecast accounts for the active command during expected API wait, then the 
 
 The current fire question asks the model to shoot when enemies exist; it is not a sophisticated target-pursuit planner.
 
+### Missiles and bombs
+
+- **Homing missiles** launch automatically every 0.5 s (at most 4 in flight) while the active Djev command authorizes `shoot`. Each steers toward its target's predicted intercept point at up to 6 rad/s and 420 px/s, deals 1 damage, and expires after 2.5 s; if its target dies it re-targets the enemy with the shortest intercept time. Guidance is weapon physics, like a bullet's flight; Djev still decides whether to fire at all.
+- **Bombs**: 3 charges per run, never refilled. A detonation destroys every enemy bullet and enemy ship within 200 px of the ship. Djev decides with a fourth choice question (`hold` / `detonate`) whose labels state what a blast would destroy right now, how many charges remain, and whether any move better than tier 5 exists. A decision detonates at most once, even though its command lasts up to 500 ms.
+
+In the deterministic lockstep simulation with a perfect label reader (below), adding them took the hardest profile from a 93 s mean (1 of 8 full runs) to 30 of 32 full 120 s runs across 220 ms and 350 ms latency.
+
 ### Tactical priorities sent to djev
 
 1. Always pick from the lowest tier number present.
@@ -202,6 +209,15 @@ An earlier formulation reached 64.15 seconds in a different development run. Tha
 
 Typically, an otherwise idle endpoint completed a decision in about 200–230 ms: roughly 4–5 decisions/s, not 60 decisions/s. Concurrent games increased observed latency to about 380–400 ms. Game physics continuing at 60 Hz does not make a 200 ms model decision a 60 Hz reflex.
 
+## Lockstep simulation
+
+`demo/lockstep_sim.cjs` replays the production path (core, controller, and bridge labels) in game time: it pauses while a decision is in flight and applies each answer `--latency-ms` after its observation. Pair it with a bridge started with `--upstream oracle` to measure whether the labels carry enough information (no model call), or with a normal bridge to measure Djev itself:
+
+```bash
+go run ./demo/bridge --port 7870 --upstream oracle --runs-dir /tmp/sim-runs
+node demo/lockstep_sim.cjs --url http://127.0.0.1:7870 --seeds 1-8 --profile hardest
+```
+
 ## Tests and optional benchmarks
 
 Offline tests require no running model:
@@ -213,7 +229,7 @@ node demo/test_strategy_regression.cjs
 go test ./demo/bridge/
 ```
 
-The publication check covers 45 core/controller/UI cases, 47 benchmark cases, 10 scenario-harness cases, and 24 Go bridge cases: **126 tests**. The scenario harness runs the bridge's event validator through `go run`, so Go must be on `PATH` (or set `GO`). These validate software behavior, not tactical quality.
+The publication check covers 49 core/controller/UI cases, 47 benchmark cases, 10 scenario-harness cases, and 25 Go bridge cases: **131 tests**. The scenario harness runs the bridge's event validator through `go run`, so Go must be on `PATH` (or set `GO`). These validate software behavior, not tactical quality.
 
 With the bridge and model running, pause other model-controlled games before a bounded live test:
 

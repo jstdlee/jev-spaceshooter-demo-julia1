@@ -478,15 +478,16 @@ test('requests offer all nine fixed-medium paths, both fire choices, and all thr
   const { core, controller: api } = loadModules();
   const controller = api.createController({ run_id: 'intent-request', epoch: 1 });
   const request = begin(api, controller, core);
-  assert.equal(request.prompt_version, 'djev-authoritative-v3');
-  assert.equal(request.context_version, 'djev-observation-v3');
-  assert.deepEqual(Object.keys(request.questions), ['path', 'fire', 'intent']);
+  assert.equal(request.prompt_version, 'djev-authoritative-v4');
+  assert.equal(request.context_version, 'djev-observation-v4');
+  assert.deepEqual(Object.keys(request.questions), ['path', 'fire', 'intent', 'bomb']);
   assert.deepEqual(Object.keys(request.questions.path.criteria), [
     'hold__medium', 'left__medium', 'right__medium', 'up__medium', 'down__medium',
     'up_left__medium', 'up_right__medium', 'down_left__medium', 'down_right__medium',
   ]);
   assert.deepEqual(Object.keys(request.questions.fire.criteria), ['shoot', 'cease']);
   assert.deepEqual(Object.keys(request.questions.intent.criteria), ['evade', 'recover', 'position']);
+  assert.deepEqual(Object.keys(request.questions.bomb.criteria), ['hold', 'detonate']);
 });
 
 test('missing or unknown intent atomically ends current authority and cannot move or shoot', () => {
@@ -925,6 +926,84 @@ test('medium forecasts report move contact, two-step escape options, and endpoin
   assert.equal(byId.right.move_contact_ms, null);
   assert.equal(byId.right.crowd_count, 2);
   assert.equal(byId.hold.crowd_count, 3);
+});
+
+test('missiles launch only under a shoot command, home onto an enemy, and destroy it', () => {
+  const { core } = loadModules();
+  const game = cleanForecastGame(core, { x: 480, y: 550 });
+  game.enemies = [scoutEnemy({ id: 'far-target', x: 700, y: 150 })];
+  const cease = { movement: 'hold', fire: 'cease', decision_id: 'd-cease', sequence: 1, source: 'djev' };
+  core.stepGame(game, cease);
+  assert.equal(game.playerMissiles.length, 0);
+  core.stepGame(game, null);
+  assert.equal(game.playerMissiles.length, 0);
+
+  const shoot = { movement: 'hold', fire: 'shoot', decision_id: 'd-shoot', sequence: 2, source: 'djev' };
+  const events = [];
+  for (let i = 0; i < 240 && game.enemies.length; i += 1) events.push(...core.stepGame(game, shoot).events);
+  const launches = events.filter((e) => e.type === 'missile_launch');
+  assert.ok(launches.length >= 1);
+  assert.equal(launches[0].target_id, 'far-target');
+  assert.equal(launches[0].decision_id, 'd-shoot');
+  assert.ok(events.some((e) => e.type === 'missile_hit' && e.enemy_id === 'far-target'));
+  assert.ok(events.some((e) => e.type === 'enemy_destroyed' && e.enemy_id === 'far-target' && ['missile', 'gun'].includes(e.source)));
+  assert.ok(game.playerMissiles.length <= core.MISSILE.max_active);
+});
+
+test('missile launches respect the interval and active cap', () => {
+  const { core } = loadModules();
+  const game = cleanForecastGame(core, { x: 480, y: 550 });
+  game.enemies = [{ ...scoutEnemy({ id: 'tank', x: 480, y: -400 }), hp: 99, maxHp: 99 }];
+  const shoot = { movement: 'hold', fire: 'shoot', decision_id: 'd', sequence: 1, source: 'djev' };
+  let launches = 0;
+  for (let i = 0; i < 180; i += 1) {
+    launches += core.stepGame(game, shoot).events.filter((e) => e.type === 'missile_launch').length;
+    assert.ok(game.playerMissiles.length <= core.MISSILE.max_active);
+  }
+  assert.ok(launches <= Math.floor(3 / core.MISSILE.launch_interval_s) + 1);
+});
+
+test('a bomb clears threats within its radius once per decision and consumes one of three charges', () => {
+  const { core } = loadModules();
+  const game = cleanForecastGame(core, { x: 480, y: 400 });
+  game.enemyBullets = [bullet({ id: 'near', x: 480, y: 300 }), bullet({ id: 'far', x: 480, y: 50 })];
+  game.enemies = [scoutEnemy({ id: 'near-enemy', x: 600, y: 400 }), scoutEnemy({ id: 'far-enemy', x: 60, y: 60 })];
+  assert.equal(game.bomb.charges, 3);
+  assert.deepEqual(JSON.parse(JSON.stringify(core.observeGame(game, { expected_delay_ms: 0 }).state.bomb)), { charges: 3, radius_px: 200, bullets_in_radius: 1, enemies_in_radius: 1 });
+
+  const hold = { movement: 'hold', fire: 'cease', bomb: 'hold', decision_id: 'd0', sequence: 1, source: 'djev' };
+  core.stepGame(game, hold);
+  assert.equal(game.bomb.charges, 3);
+
+  const detonate = { movement: 'hold', fire: 'cease', bomb: 'detonate', decision_id: 'd1', sequence: 2, source: 'djev' };
+  const { events } = core.stepGame(game, detonate);
+  const blast = events.find((e) => e.type === 'bomb_detonated');
+  assert.deepEqual([...blast.removed_bullet_ids], ['near']);
+  assert.deepEqual([...blast.destroyed_enemy_ids], ['near-enemy']);
+  assert.equal(blast.charges_after, 2);
+  assert.deepEqual(game.enemyBullets.map((b) => b.id), ['far']);
+  assert.deepEqual(game.enemies.map((e) => e.id), ['far-enemy']);
+
+  core.stepGame(game, detonate);
+  assert.equal(game.bomb.charges, 2, 'the same decision must not detonate twice across its lease');
+  for (const id of ['d2', 'd3']) core.stepGame(game, { ...detonate, decision_id: id });
+  assert.equal(game.bomb.charges, 0);
+  assert.ok(core.stepGame(game, { ...detonate, decision_id: 'd4' }).events.some((e) => e.type === 'bomb_unavailable'));
+  assert.equal(game.counters.bombsUsed, 3);
+});
+
+test('controller carries a Djev bomb choice onto the active command and rejects unknown bomb values', () => {
+  const { controller: api } = loadModules();
+  const control = api.createController({ run_id: 'bomb-run', epoch: 1 });
+  api.beginDecision(control, { tick: 0, wall_ms: 0, state: {}, forecast: {}, checkpoint: {} });
+  const reply = { run_id: 'bomb-run', epoch: 1, sequence: 1, api_ok: true, valid_choice: true, decision_id: 'b1', movement: 'left', fire: 'shoot', lease: 'medium', intent: 'evade', bomb: 'detonate' };
+  api.receiveDecision(control, reply, { tick: 10, wall_ms: 150 });
+  api.finishDecision(control, { sequence: 1, wall_ms: 150 });
+  assert.equal(api.commandForTick(control, { tick: 10, wall_ms: 150 }).command.bomb, 'detonate');
+
+  api.beginDecision(control, { tick: 11, wall_ms: 160, state: {}, forecast: {}, checkpoint: {} });
+  const rejected = api.receiveDecision(control, { ...reply, sequence: 2, decision_id: 'b2', bomb: 'maybe' }, { tick: 20, wall_ms: 300 });
+  assert.equal(rejected.events[0].reason, 'unknown_bomb');
 });
 
 test('canonical policy ticks return the proposal separately from the effective command', () => {
