@@ -110,7 +110,8 @@ func candidateJSON(movement string) string {
 			"edge_distances_px":{"left":460.123,"right":459.877,"top":398.987,"bottom":193.013},"shot_eta_ms":218.75},
 		"medium":{"endpoint":{"x":481.456,"y":406.654},"contact_ms":%s,"clearance_px":28.75,"enemy_clearance_px":64.25,
 			"edge_distances_px":{"left":461.456,"right":458.544,"top":397.654,"bottom":194.346},"shot_eta_ms":null,
-			"crowd_count":2,"move_contact_ms":%s,"escape_options":%s,"escape_clearance_px":%s}}`,
+			"crowd_count":2,"move_contact_ms":%s,"escape_options":%s,"escape_clearance_px":%s,
+			"pickup_collect":null,"pickup_toward":null}}`,
 		movement, contact, moveContact, escapes, escapeGap)
 }
 
@@ -125,7 +126,7 @@ func decisionBody(t *testing.T, runID string) map[string]any {
 			"player":{"x":480.12,"y":408.34,"w":20,"h":18,"lives":3,"cooldown_ms":40.25,"invulnerability_ms":0},
 			"active_command":{"decision_id":"old-decision","sequence":3,"movement":"up","fire":"shoot","lease":"short","remaining_ms":83.34,"intent":"evade"},
 			"last_intent":"recover","enemy_fire_in_ms":155.5,
-			"bomb":{"charges":3,"radius_px":200,"bullets_in_radius":4,"enemies_in_radius":1},"missiles_active":2,
+			"bomb":{"charges":3,"max_charges":6,"radius_px":200,"bullets_in_radius":4,"enemies_in_radius":1},"missiles_active":2,
 			"threat_counts":{"enemies":6,"enemy_bullets":11,"nearest_threats_total":17},
 			"nearest_threats":[{"kind":"bullet","x":500,"y":320,"vx":0,"vy":405.25,"w":8,"h":8}],
 			"recent_commands":[{"movement":"left","fire":"cease","lease":"medium","elapsed_ms":500,"dx":-56,"dy":0,"source":"djev"}],
@@ -423,6 +424,35 @@ func TestBombCriteriaRankUseOnlyWithoutSafeMove(t *testing.T) {
 	body := decisionBody(t, "bomb")
 	delete(body["state"].(map[string]any), "bomb")
 	_, err := packModelContext(requestFor(t, body))
+	expectAPIError(t, err, 400)
+}
+
+func TestPickupLabelsAndRanks(t *testing.T) {
+	// "up" (index 3) continues the executing command and is tier 2 OK in the base fixture.
+	body := decisionBody(t, "pickup")
+	medium(body, 3)["pickup_collect"] = "bomb"
+	medium(body, 5)["pickup_toward"] = "weapon"
+	criteria, _, err := buildPathCriteria(requestFor(t, body))
+	must(t, err)
+	if got := criteria.Get("up__medium"); got != "Tier 1 GOOD: 6/9 escapes, tight gap, near enemy, collects bomb, busy space, continues." {
+		t.Fatalf("collect: %q", got)
+	}
+	if got := criteria.Get("up_left__medium"); got != "Tier 2 OK: 6/9 escapes, tight gap, near enemy, toward weapon, busy space, continues." {
+		t.Fatalf("toward: %q", got)
+	}
+	// Pursuit: while a wanted pickup is reachable, safe moves that ignore it drop a tier.
+	if got := criteria.Get("up_right__medium"); got != "Tier 3 RISKY: 6/9 escapes, tight gap, near enemy, busy space, continues." {
+		t.Fatalf("ignoring the pickup: %q", got)
+	}
+	// Pickups never lift a move out of an unsafe tier.
+	medium(body, 1)["pickup_collect"] = "bomb"
+	criteria, _, err = buildPathCriteria(requestFor(t, body))
+	must(t, err)
+	if got := criteria.Get("left__medium"); got != "Tier 6 DEADLY: a threat hits the ship in 125 ms." {
+		t.Fatalf("deadly collect: %q", got)
+	}
+	medium(body, 2)["pickup_toward"] = "shield"
+	_, _, err = buildPathCriteria(requestFor(t, body))
 	expectAPIError(t, err, 400)
 }
 

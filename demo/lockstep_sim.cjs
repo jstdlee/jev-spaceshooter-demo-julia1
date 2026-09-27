@@ -55,7 +55,7 @@ async function runSeed(modules, options, seed) {
   const control = api.createController({ run_id: runId, epoch: 1 });
   const latencyTicks = Math.max(1, Math.round(options.latencyMs / DT));
   const maxTicks = Math.round(options.seconds * 1000 / DT);
-  const stats = { decisions: 0, below_best: 0, bombs: 0, hits: [] };
+  const stats = { decisions: 0, bombs: 0, bomb_pickups: 0, weapon_pickups: 0, pickups_spawned: 0, hits: [] };
   let pending = null; // { due_tick, reply }
 
   while (!game.terminal && game.tick < maxTicks) {
@@ -70,6 +70,8 @@ async function runSeed(modules, options, seed) {
     for (const event of step.events) {
       if (event.type === 'hit') stats.hits.push({ t: +(game.sim_ms / 1000).toFixed(1), kind: event.source.kind, x: Math.round(event.player.x), y: Math.round(event.player.y) });
       if (event.type === 'bomb_detonated') stats.bombs += 1;
+      if (event.type === 'pickup_spawned') stats.pickups_spawned += 1;
+      if (event.type === 'pickup_collected') stats[`${event.kind}_pickups`] += 1;
     }
     // Like the live loop: request only after a tick has run with the newly applied command.
     if (!pending && !control.pending && !game.terminal) {
@@ -83,7 +85,7 @@ async function runSeed(modules, options, seed) {
       pending = { due_tick: game.tick + latencyTicks, reply };
     }
   }
-  return { seed, sim_s: +(game.sim_ms / 1000).toFixed(1), lives: game.player.lives, wave: game.wave, kills: game.counters.enemiesDestroyed, ...stats };
+  return { seed, sim_s: +(game.sim_ms / 1000).toFixed(1), lives: game.player.lives, wave: game.wave, kills: game.counters.enemiesDestroyed, weapon_level: game.weaponLevel, ...stats };
 }
 
 async function main() {
@@ -91,11 +93,12 @@ async function main() {
   const modules = loadSpaceModulesFromHtml(path.join(__dirname, 'space-shooter.html'));
   const results = await Promise.all(options.seeds.map((seed) => runSeed(modules, options, seed)));
   for (const r of results) {
-    console.log(JSON.stringify(options.verbose ? r : { seed: r.seed, sim_s: r.sim_s, lives: r.lives, wave: r.wave, kills: r.kills, bombs: r.bombs, decisions: r.decisions, hits: r.hits.map((h) => `${h.t}s@${h.x},${h.y}`).join(' ') }));
+    console.log(JSON.stringify(options.verbose ? r : { seed: r.seed, sim_s: r.sim_s, lives: r.lives, wave: r.wave, kills: r.kills, bombs: r.bombs, picked: `${r.bomb_pickups}b+${r.weapon_pickups}w/${r.pickups_spawned}`, weapon: r.weapon_level, decisions: r.decisions, hits: r.hits.map((h) => `${h.t}s@${h.x},${h.y}`).join(' ') }));
   }
   const survived = results.map((r) => r.sim_s);
   const full = survived.filter((s) => s >= options.seconds).length;
-  console.log(`${options.profile} latency=${options.latencyMs}ms: mean ${(survived.reduce((a, b) => a + b, 0) / survived.length).toFixed(1)}s, min ${Math.min(...survived)}s, full ${full}/${results.length}`);
+  const sum = (key) => results.reduce((a, r) => a + r[key], 0);
+  console.log(`${options.profile} latency=${options.latencyMs}ms: mean ${(survived.reduce((a, b) => a + b, 0) / survived.length).toFixed(1)}s, min ${Math.min(...survived)}s, full ${full}/${results.length}, pickups ${sum('bomb_pickups')}b+${sum('weapon_pickups')}w of ${sum('pickups_spawned')}, bombs used ${sum('bombs')}, hits ${results.reduce((a, r) => a + r.hits.length, 0)}`);
 }
 
 main().catch((error) => {

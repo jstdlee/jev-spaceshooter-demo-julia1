@@ -478,8 +478,8 @@ test('requests offer all nine fixed-medium paths, both fire choices, and all thr
   const { core, controller: api } = loadModules();
   const controller = api.createController({ run_id: 'intent-request', epoch: 1 });
   const request = begin(api, controller, core);
-  assert.equal(request.prompt_version, 'djev-authoritative-v4');
-  assert.equal(request.context_version, 'djev-observation-v4');
+  assert.equal(request.prompt_version, 'djev-authoritative-v5');
+  assert.equal(request.context_version, 'djev-observation-v5');
   assert.deepEqual(Object.keys(request.questions), ['path', 'fire', 'intent', 'bomb']);
   assert.deepEqual(Object.keys(request.questions.path.criteria), [
     'hold__medium', 'left__medium', 'right__medium', 'up__medium', 'down__medium',
@@ -969,7 +969,7 @@ test('a bomb clears threats within its radius once per decision and consumes one
   game.enemyBullets = [bullet({ id: 'near', x: 480, y: 300 }), bullet({ id: 'far', x: 480, y: 50 })];
   game.enemies = [scoutEnemy({ id: 'near-enemy', x: 600, y: 400 }), scoutEnemy({ id: 'far-enemy', x: 60, y: 60 })];
   assert.equal(game.bomb.charges, 3);
-  assert.deepEqual(JSON.parse(JSON.stringify(core.observeGame(game, { expected_delay_ms: 0 }).state.bomb)), { charges: 3, radius_px: 200, bullets_in_radius: 1, enemies_in_radius: 1 });
+  assert.deepEqual(JSON.parse(JSON.stringify(core.observeGame(game, { expected_delay_ms: 0 }).state.bomb)), { charges: 3, max_charges: 6, radius_px: 200, bullets_in_radius: 1, enemies_in_radius: 1 });
 
   const hold = { movement: 'hold', fire: 'cease', bomb: 'hold', decision_id: 'd0', sequence: 1, source: 'djev' };
   core.stepGame(game, hold);
@@ -990,6 +990,79 @@ test('a bomb clears threats within its radius once per decision and consumes one
   assert.equal(game.bomb.charges, 0);
   assert.ok(core.stepGame(game, { ...detonate, decision_id: 'd4' }).events.some((e) => e.type === 'bomb_unavailable'));
   assert.equal(game.counters.bombsUsed, 3);
+});
+
+test('a new wave keeps bullets in flight instead of clearing them', () => {
+  const { core } = loadModules();
+  const game = cleanForecastGame(core, { x: 480, y: 550 });
+  game.waveActive = true;
+  game.enemies = [];
+  game.enemyBullets = [bullet({ id: 'old-wave-bullet', x: 100, y: 100, vy: 50 })];
+  game.playerBullets = [{ id: 'old-shot', x: 300, y: 300, vx: 0, vy: -580, radius: 3 }];
+  core.stepGame(game, null);
+  assert.equal(game.wave, 2);
+  assert.ok(game.enemyBullets.some((b) => b.id === 'old-wave-bullet'));
+  assert.ok(game.playerBullets.some((b) => b.id === 'old-shot'));
+});
+
+test('flying into pickups adds bombs up to six and raises weapon level to spread shots and six missiles', () => {
+  const { core } = loadModules();
+  const game = cleanForecastGame(core, { x: 480, y: 400 });
+  game.pickupClock_s = { bomb: 99, weapon: 99 };
+  const pickup = (id, kind) => ({ id, kind, x: 480, y: 400, vx: 0, vy: 0, age_s: 0, hue: 10 });
+  for (let i = 0; i < 4; i += 1) {
+    game.pickups = [pickup(`b${i}`, 'bomb')];
+    const { events } = core.stepGame(game, null);
+    assert.ok(events.some((e) => e.type === 'pickup_collected' && e.kind === 'bomb'));
+  }
+  assert.equal(game.bomb.charges, core.BOMB.max_charges, 'bombs cap at six');
+
+  const shoot = { movement: 'hold', fire: 'shoot', decision_id: 'd', sequence: 1, source: 'djev' };
+  const shotsAt = (level) => {
+    game.weaponLevel = level;
+    game.player.cooldown_s = 0;
+    return core.stepGame(game, shoot).events.filter((e) => e.type === 'shot').length;
+  };
+  assert.equal(shotsAt(0), 1);
+  for (let i = 0; i < 5; i += 1) {
+    game.weaponLevel = Math.min(game.weaponLevel, core.WEAPON.max_level);
+    game.pickups = [pickup(`w${i}`, 'weapon')];
+    core.stepGame(game, null);
+  }
+  assert.equal(game.weaponLevel, core.WEAPON.max_level);
+  assert.equal(shotsAt(core.WEAPON.max_level), 5);
+
+  game.enemies = [{ ...scoutEnemy({ id: 'sponge', x: 480, y: 60 }), hp: 999, maxHp: 999 }];
+  game.enemyBullets = [];
+  const flying = (n) => Array.from({ length: n }, (_, i) => ({ id: `m${i}`, x: 10, y: 600, heading: 0, age_s: 0, target_id: 'sponge', decision_id: 'd' }));
+  const launchesWith = (active) => {
+    game.playerMissiles = flying(active);
+    game.missileClock_s = 0;
+    return core.stepGame(game, shoot).events.filter((e) => e.type === 'missile_launch').length;
+  };
+  assert.equal(core.MISSILE.max_active_top, 6);
+  assert.equal(launchesWith(5), 1, 'top weapon level allows a sixth missile');
+  assert.equal(launchesWith(6), 0);
+  game.weaponLevel = 0;
+  assert.equal(launchesWith(core.MISSILE.max_active), 0, 'level 0 caps at the base count');
+});
+
+test('forecast marks moves that collect or approach a wanted pickup, and ignores unwanted ones', () => {
+  const { core } = loadModules();
+  const game = cleanForecastGame(core, { x: 480, y: 400 });
+  game.pickups = [{ id: 'p', kind: 'bomb', x: 540, y: 400, vx: 0, vy: 0, age_s: 0, hue: 0 }];
+  const byId = () => Object.fromEntries(core.observeGame(game, { expected_delay_ms: 0 }).forecast.candidates.map((c) => [c.id, c.medium]));
+  let forecast = byId();
+  assert.equal(forecast.right.pickup_collect, 'bomb');
+  assert.equal(forecast.left.pickup_collect, null);
+  assert.equal(forecast.left.pickup_toward, null);
+  game.pickups[0].x = 800;
+  forecast = byId();
+  assert.equal(forecast.right.pickup_collect, null);
+  assert.equal(forecast.right.pickup_toward, 'bomb');
+  game.bomb.charges = core.BOMB.max_charges;
+  forecast = byId();
+  assert.equal(forecast.right.pickup_toward, null, 'full bombs make bomb pickups unwanted');
 });
 
 test('controller carries a Djev bomb choice onto the active command and rejects unknown bomb values', () => {

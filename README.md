@@ -141,10 +141,14 @@ The forecast accounts for the active command during expected API wait, then the 
 
 The current fire question asks the model to shoot when enemies exist; it is not a sophisticated target-pursuit planner.
 
-### Missiles and bombs
+### Missiles, bombs, and pickups
 
-- **Homing missiles** launch automatically every 0.5 s (at most 4 in flight) while the active Djev command authorizes `shoot`. Each steers toward its target's predicted intercept point at up to 6 rad/s and 420 px/s, deals 1 damage, and expires after 2.5 s; if its target dies it re-targets the enemy with the shortest intercept time. Guidance is weapon physics, like a bullet's flight; Djev still decides whether to fire at all.
-- **Bombs**: 3 charges per run, never refilled. A detonation destroys every enemy bullet and enemy ship within 200 px of the ship. Djev decides with a fourth choice question (`hold` / `detonate`). Like paths, each choice leads with a rank: `Rank 1 USE NOW` for detonate only when every move is tier 5 or 6 and the blast would destroy something, otherwise `Rank 1 SAVE` for hold; both state what a blast would destroy and how many charges remain. With the reasons only in prose, Djev detonated in 1 of 14 such emergencies. A decision detonates at most once, even though its command lasts up to 500 ms.
+- **Pickups** float and bounce through the lower play area (y 260–560, away from the enemy formation) and fade out over the last 2 s of a 14 s life. Bomb pickups (orange orbs, first at 6 s, then every 11 s) add a bomb; weapon blocks (color-cycling squares, first at 9 s, then every 17 s) raise the weapon level up to 3: the gun fires 1, 3, 5, 5 spread shots and the missile cap is 4, 5, 6, 6. Spawn positions come from the seeded game RNG, so replays match.
+- **Collecting is a Djev decision.** Each path label says `collects bomb`/`collects weapon` when the move's path touches a wanted pickup, or `toward …` when it closes in by 20 px. A collecting move rises one tier; while a wanted pickup is reachable, safe moves that ignore it drop one. With only the rise, Djev gathered 24 of 96 pickups and survived 3/6 lockstep runs; with both, 41 of 101 and 5/6.
+- **Wave changes clear nothing.** Bullets and missiles already in flight finish their paths.
+
+- **Homing missiles** launch automatically every 0.5 s (4 in flight at weapon level 0, up to 6) while the active Djev command authorizes `shoot`. Each steers toward its target's predicted intercept point at up to 6 rad/s and 420 px/s, deals 1 damage, and expires after 2.5 s; if its target dies it re-targets the enemy with the shortest intercept time. Guidance is weapon physics, like a bullet's flight; Djev still decides whether to fire at all.
+- **Bombs**: start with 3 charges, up to 6 by collecting bomb pickups. A detonation destroys every enemy bullet and enemy ship within 200 px of the ship. Djev decides with a fourth choice question (`hold` / `detonate`). Like paths, each choice leads with a rank: `Rank 1 USE NOW` for detonate only when every move is tier 5 or 6 and the blast would destroy something, otherwise `Rank 1 SAVE` for hold; both state what a blast would destroy and how many charges remain. With the reasons only in prose, Djev detonated in 1 of 14 such emergencies. A decision detonates at most once, even though its command lasts up to 500 ms.
 
 Results (hardest = 4× bullets, 3× enemies, 85% fast bullets at 2.4×):
 

@@ -32,6 +32,8 @@
     .statusline:last-child { border-bottom:0; }
     .statusline span:first-child { color:var(--muted); }
     .statusline strong { min-width:0; overflow-wrap:anywhere; }
+    .under-controls { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:0 14px; border-top:1px solid var(--line); }
+    @media (max-width:760px) { .under-controls { grid-template-columns:1fr; } }
     .candidate-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:6px; }
     .candidate { border:1px solid var(--line); border-radius:7px; padding:6px; min-width:0; background:#091528; }
     .candidate b { display:block; font-size:10px; overflow:hidden; text-overflow:ellipsis; }
@@ -60,8 +62,8 @@
 <body>
   <main class="shell">
     <header>
-      <div><div class="eyebrow">djev · API-authoritative path + fire + intent</div><h1>Space shooter live control trace</h1></div>
-      <div class="sub">djev returns three atomic choices: one of nine movement paths, shoot/cease, and intent — 避险 (evade), 回中 (recover), or 稳定站位 (position). Each accepted command authorizes at most 500 ms; any missing, invalid, or stale choice means neutral hold plus cease.</div>
+      <div><div class="eyebrow">djev · API-authoritative path + fire + bomb + intent</div><h1>Space shooter live control trace</h1></div>
+      <div class="sub">djev returns four atomic choices: one of nine movement paths, shoot/cease (gun plus homing missiles), hold/detonate for the bomb, and intent — 避险 (evade), 回中 (recover), or 稳定站位 (position). Each accepted command authorizes at most 500 ms; any missing, invalid, or stale choice means neutral hold plus cease. Fly into floating pickups for bombs (max 6) and weapon power.</div>
     </header>
     <div class="layout">
       <section id="game-panel" class="panel">
@@ -75,6 +77,8 @@
           <div><span class="label">Mode</span><span class="value" id="hud-mode">AUTO</span></div>
           <div><span class="label">Bombs</span><span class="value" id="hud-bombs">●●●</span></div>
           <div><span class="label">Missiles</span><span class="value" id="hud-missiles">0 · 0 kills</span></div>
+          <div><span class="label">Weapon</span><span class="value" id="hud-weapon">Lv 0 · 1-way</span></div>
+          <div><span class="label">Pickups</span><span class="value" id="hud-pickups">0 bomb · 0 weapon</span></div>
         </div>
         <div class="controls">
           <button id="autopilot-button">Auto pilot: ON</button>
@@ -83,18 +87,7 @@
           <span id="http-warning" class="http-warning">This page is open as a local file, so djev and trace HTTP endpoints are unreachable. Serve it from the preview/server HTTP URL for model-controlled evidence; local file play remains neutral hold plus cease on failures.</span>
           <span class="sub">Manual input, pause, reset, profile changes, or lag invalidate benchmark qualification for the active run.</span>
         </div>
-      </section>
-      <aside class="side">
-        <section id="decision-panel" class="panel">
-          <div class="section">
-            <h2>Difficulty</h2>
-            <div class="tuning-grid">
-              <label class="slider-row"><span>Bullet density</span><input id="bullet-density" type="range" min="1" max="4" step="0.25" value="1" /><b id="bullet-density-value">1.00x</b></label>
-              <label class="slider-row"><span>Enemy density</span><input id="enemy-density" type="range" min="1" max="3" step="0.25" value="1" /><b id="enemy-density-value">1.00x</b></label>
-              <label class="slider-row"><span>Fast bullets</span><input id="fast-bullet-ratio" type="range" min="0" max="0.85" step="0.05" value="0" /><b id="fast-bullet-ratio-value">0%</b></label>
-              <label class="slider-row"><span>Fast speed</span><input id="fast-bullet-speed" type="range" min="1.1" max="2.4" step="0.1" value="1.6" /><b id="fast-bullet-speed-value">1.60x</b></label>
-            </div>
-          </div>
+        <div class="under-controls">
           <div class="section">
             <h2>Authoritative command</h2>
             <div class="statusline"><span>djev</span><strong id="selected">none</strong></div>
@@ -109,7 +102,20 @@
           <div class="section">
             <h2>All nine movement observations</h2>
             <div id="candidate-grid" class="candidate-grid"></div>
-            <div class="note">All nine medium paths carry inline factual criteria: collision boolean and time, gap, progress toward center, and wall room under a fixed 500 ms max authorization. State includes the hold gap without duplicating a paths table. Additional enemy-spacing and shot forecasts are UI/debug-only, not live choice fields. Contact is post-arrival through the common horizon while currently vulnerable; wait-prefix contact is separate.</div>
+            <div class="note">Each medium path reaches djev as a tier-numbered label (1 GOOD … 6 DEADLY) built from these forecasts: contact during the move, clear follow-up moves, bullet gap, enemy and wall distance, crowding, motion versus the executing command, and pickups it collects or approaches. The cells here are a debug view of the same forecasts.</div>
+          </div>
+        </div>
+      </section>
+      <aside class="side">
+        <section id="decision-panel" class="panel">
+          <div class="section">
+            <h2>Difficulty</h2>
+            <div class="tuning-grid">
+              <label class="slider-row"><span>Bullet density</span><input id="bullet-density" type="range" min="1" max="4" step="0.25" value="1" /><b id="bullet-density-value">1.00x</b></label>
+              <label class="slider-row"><span>Enemy density</span><input id="enemy-density" type="range" min="1" max="3" step="0.25" value="1" /><b id="enemy-density-value">1.00x</b></label>
+              <label class="slider-row"><span>Fast bullets</span><input id="fast-bullet-ratio" type="range" min="0" max="0.85" step="0.05" value="0" /><b id="fast-bullet-ratio-value">0%</b></label>
+              <label class="slider-row"><span>Fast speed</span><input id="fast-bullet-speed" type="range" min="1.1" max="2.4" step="0.1" value="1.6" /><b id="fast-bullet-speed-value">1.60x</b></label>
+            </div>
           </div>
           <div class="section">
             <h2>API observations</h2>
@@ -134,7 +140,7 @@
   (() => {
     "use strict";
 
-    const ENGINE_VERSION = "space-decision-core-v4";
+    const ENGINE_VERSION = "space-decision-core-v5";
     const DT_MS = 1000 / 60;
     const DT_SECONDS = 1 / 60;
     const WIDTH = 960;
@@ -164,9 +170,15 @@
     const HARDEST_DIFFICULTY = Object.freeze({ bulletDensity:4, enemyDensity:3, fastBulletRatio:.85, fastBulletSpeed:2.4 });
     const PRNG_VERSION = "xorshift32-v1";
     // Homing missiles launch automatically while a Djev command authorizes the gun.
-    const MISSILE = Object.freeze({ speed:420, turn_rate:6, damage:1, lifetime_s:2.5, launch_interval_s:.5, max_active:4, box:{ w:8, h:14 } });
+    // Missile cap grows with weapon level: 4 at level 0 up to 6.
+    const MISSILE = Object.freeze({ speed:420, turn_rate:6, damage:1, lifetime_s:2.5, launch_interval_s:.5, max_active:4, max_active_top:6, box:{ w:8, h:14 } });
     // Each bomb destroys every enemy bullet and enemy ship within the radius; Djev decides when.
-    const BOMB = Object.freeze({ charges:3, radius_px:200 });
+    const BOMB = Object.freeze({ charges:3, max_charges:6, radius_px:200 });
+    // Weapon level from collected weapon blocks: gun spread widens and the missile cap rises.
+    const WEAPON = Object.freeze({ max_level:3, spread_by_level:[1, 3, 5, 5], spread_step_rad:.16 });
+    // Pickups float through the lower play area (away from the enemy formation) and are collected by flying into them.
+    const PICKUP = Object.freeze({ box:{ w:24, h:24 }, lifetime_s:14, fade_s:2, speed:55, y_min:260, y_max:560,
+      spawn_interval_s:{ bomb:11, weapon:17 }, first_spawn_s:{ bomb:6, weapon:9 } });
     const BOMB_IDS = Object.freeze(["hold","detonate"]);
     const RULES = Object.freeze({
       arena:{ width:WIDTH, height:HEIGHT },
@@ -182,6 +194,8 @@
       bomb_ids:BOMB_IDS,
       missile:MISSILE,
       bomb:BOMB,
+      weapon:WEAPON,
+      pickup:PICKUP,
       prng:PRNG_VERSION,
     });
 
@@ -296,8 +310,7 @@
       game.profile = waveProfile(game.wave);
       const count = enemyCountForWave(game.wave, game.profile, game.difficulty);
       game.enemies = Array.from({ length: count }, (_, index) => createEnemy(game, game.profile.enemyType, index, count));
-      game.playerBullets = [];
-      game.enemyBullets = [];
+      // Shots already in flight finish their paths; clearing them at a wave change looked like cheating.
       game.enemyFireClock_s = Math.min(.8, fireIntervalForDifficulty(game.difficulty));
       game.waveClock_s = 0;
       game.waveActive = true;
@@ -326,6 +339,9 @@
         playerMissiles: [],
         missileClock_s: 0,
         bomb: { charges:BOMB.charges, last_decision_id:null },
+        weaponLevel: 0,
+        pickups: [],
+        pickupClock_s: { bomb:PICKUP.first_spawn_s.bomb, weapon:PICKUP.first_spawn_s.weapon },
         enemyBullets: [],
         enemies: [],
         events: [],
@@ -352,6 +368,9 @@
           bombsUsed: 0,
           bombBulletsCleared: 0,
           bombEnemiesDestroyed: 0,
+          pickupsSpawned: 0,
+          bombPickups: 0,
+          weaponPickups: 0,
         },
       };
       startWave(game);
@@ -714,6 +733,40 @@
       return { move_contact_ms:first.contact_ms, escape_options:first.contact_ms === null ? options : 0, escape_clearance_px:bestClearance };
     }
 
+    const PICKUP_PROGRESS_PX = 20;
+
+    function wantedPickups(game) {
+      return game.pickups.filter((pickup) => pickup.kind === "bomb" ? game.bomb.charges < BOMB.max_charges : game.weaponLevel < WEAPON.max_level);
+    }
+
+    // Which wanted pickup this move's path touches (linear pickup motion), or which one it closes in on.
+    function pickupForecast(game, movement, expectedDelayMs, activeCommand) {
+      const wanted = wantedPickups(game);
+      if (!wanted.length) return { collect:null, toward:null };
+      const leaseEndMs = expectedDelayMs + LEASE_MS.medium;
+      const segments = buildForecastSegments(game, movement, "medium", expectedDelayMs, activeCommand, leaseEndMs);
+      let collect = null;
+      for (const pickup of wanted) {
+        const target = { x:pickup.x, y:pickup.y, vx:pickup.vx, vy:pickup.vy, w:PICKUP.box.w, h:PICKUP.box.h };
+        const half = { x:PLAYER_W / 2 + PICKUP.box.w / 2, y:PLAYER_H / 2 + PICKUP.box.h / 2 };
+        for (const segment of segments) {
+          const contact = sweptContact(segment, target, half);
+          if (contact !== null && (!collect || contact < collect.at)) collect = { kind:pickup.kind, at:contact };
+        }
+      }
+      const endpoint = pointAtSegments(segments, leaseEndMs);
+      const endS = leaseEndMs / 1000;
+      let nearest = null;
+      for (const pickup of wanted) {
+        const px = pickup.x + pickup.vx * endS;
+        const py = pickup.y + pickup.vy * endS;
+        const progress = Math.hypot(px - game.player.x, py - game.player.y) - Math.hypot(px - endpoint.x, py - endpoint.y);
+        const distance = Math.hypot(px - game.player.x, py - game.player.y);
+        if (!nearest || distance < nearest.distance) nearest = { kind:pickup.kind, distance, progress };
+      }
+      return { collect:collect ? collect.kind : null, toward:nearest && nearest.progress >= PICKUP_PROGRESS_PX ? nearest.kind : null };
+    }
+
     function forecastPrefix(game, expectedDelayMs, activeCommand) {
       const threats = hostileThreats(game);
       const segments = buildForecastSegments(game, "hold", null, expectedDelayMs, activeCommand, expectedDelayMs);
@@ -751,6 +804,7 @@
         const short = forecastPath(game, id, "short", expectedDelayMs, activeCommand);
         const medium = forecastPath(game, id, "medium", expectedDelayMs, activeCommand);
         const escape = escapeForecast(game, id, expectedDelayMs, activeCommand);
+        const pickup = pickupForecast(game, id, expectedDelayMs, activeCommand);
         const project = (forecast) => ({
           endpoint: { x:rounded(forecast.endpoint.x), y:rounded(forecast.endpoint.y) },
           contact_ms: forecast.contact_ms === null ? null : rounded(forecast.contact_ms),
@@ -768,7 +822,7 @@
           wall_clamped: forecast.wall_clamped,
         });
         const escapeClearance = escape.escape_clearance_px === null || !Number.isFinite(escape.escape_clearance_px) ? null : rounded(escape.escape_clearance_px);
-        return { id, short:project(short), medium:{ ...project(medium), move_contact_ms:escape.move_contact_ms === null ? null : rounded(escape.move_contact_ms), escape_options:escape.escape_options, escape_clearance_px:escapeClearance } };
+        return { id, short:project(short), medium:{ ...project(medium), move_contact_ms:escape.move_contact_ms === null ? null : rounded(escape.move_contact_ms), escape_options:escape.escape_options, escape_clearance_px:escapeClearance, pickup_collect:pickup.collect, pickup_toward:pickup.toward } };
       });
       const state = {
         tick: game.tick,
@@ -795,11 +849,14 @@
         enemy_fire_in_ms: rounded(Math.max(0, game.enemyFireClock_s) * 1000),
         bomb: {
           charges: game.bomb.charges,
+          max_charges: BOMB.max_charges,
           radius_px: BOMB.radius_px,
           bullets_in_radius: game.enemyBullets.filter((b) => Math.hypot(b.x - game.player.x, b.y - game.player.y) <= BOMB.radius_px).length,
           enemies_in_radius: game.enemies.filter((e) => Math.hypot(e.x - game.player.x, e.y - game.player.y) <= BOMB.radius_px).length,
         },
         missiles_active: game.playerMissiles.length,
+        weapon_level: game.weaponLevel,
+        pickups: game.pickups.map((pickup) => ({ kind:pickup.kind, x:rounded(pickup.x), y:rounded(pickup.y) })),
         threat_counts: { bullets:game.enemyBullets.length, enemies:game.enemies.length, shown:nearest.length },
         nearest_threats: nearest,
         recent_commands: (context.recent_commands || []).slice(-6).map((span) => ({
@@ -840,19 +897,86 @@
       return { state, forecast };
     }
 
+    function missileCap(game) {
+      return Math.min(MISSILE.max_active_top, MISSILE.max_active + game.weaponLevel);
+    }
+
     function emitPlayerShot(game, command, events) {
-      const shot = {
-        id: entityId(game, "pshot"),
-        x: game.player.x,
-        y: game.player.y + PLAYER_MUZZLE_Y,
-        vy: PLAYER_SHOT_SPEED,
-        radius: PLAYER_SHOT_RADIUS,
-        authorizedBy: command ? { decision_id:command.decision_id, sequence:command.sequence, movement:command.movement, fire:command.fire, lease:command.lease, ...(command.intent === undefined ? {} : { intent:command.intent }) } : null,
-      };
-      game.playerBullets.push(shot);
+      const authorizedBy = command ? { decision_id:command.decision_id, sequence:command.sequence, movement:command.movement, fire:command.fire, lease:command.lease, ...(command.intent === undefined ? {} : { intent:command.intent }) } : null;
+      const count = WEAPON.spread_by_level[game.weaponLevel];
+      for (let i = 0; i < count; i += 1) {
+        const angle = (i - (count - 1) / 2) * WEAPON.spread_step_rad;
+        const shot = {
+          id: entityId(game, "pshot"),
+          x: game.player.x,
+          y: game.player.y + PLAYER_MUZZLE_Y,
+          vx: Math.sin(angle) * -PLAYER_SHOT_SPEED,
+          vy: Math.cos(angle) * PLAYER_SHOT_SPEED,
+          radius: PLAYER_SHOT_RADIUS,
+          level: game.weaponLevel,
+          authorizedBy,
+        };
+        game.playerBullets.push(shot);
+        game.counters.playerShots += 1;
+        events.push({ type:"shot", tick:game.tick, entity_id:shot.id, decision_id:authorizedBy && authorizedBy.decision_id, sequence:authorizedBy && authorizedBy.sequence, x:shot.x, y:shot.y });
+      }
       game.player.cooldown_s = PLAYER_COOLDOWN_S;
-      game.counters.playerShots += 1;
-      events.push({ type:"shot", tick:game.tick, entity_id:shot.id, decision_id:shot.authorizedBy && shot.authorizedBy.decision_id, sequence:shot.authorizedBy && shot.authorizedBy.sequence, x:shot.x, y:shot.y });
+    }
+
+    function spawnPickup(game, kind, events) {
+      const angle = randomRange(game, 0, Math.PI * 2);
+      const pickup = {
+        id: entityId(game, "pickup"),
+        kind,
+        x: randomRange(game, 80, WIDTH - 80),
+        y: randomRange(game, PICKUP.y_min + 20, PICKUP.y_max - 60),
+        vx: Math.cos(angle) * PICKUP.speed,
+        vy: Math.sin(angle) * PICKUP.speed,
+        age_s: 0,
+        hue: Math.floor(randomRange(game, 0, 360)),
+      };
+      game.pickups.push(pickup);
+      game.counters.pickupsSpawned += 1;
+      events.push({ type:"pickup_spawned", tick:game.tick, pickup_id:pickup.id, kind, x:pickup.x, y:pickup.y });
+    }
+
+    // Pickups drift and bounce inside the play band; they expire after their lifetime.
+    function updatePickups(game, events) {
+      for (const kind of ["bomb", "weapon"]) {
+        game.pickupClock_s[kind] -= DT_SECONDS;
+        if (game.pickupClock_s[kind] <= 0) {
+          spawnPickup(game, kind, events);
+          game.pickupClock_s[kind] = PICKUP.spawn_interval_s[kind];
+        }
+      }
+      const arena = { left:PICKUP.box.w / 2, right:WIDTH - PICKUP.box.w / 2 };
+      game.pickups = game.pickups.filter((pickup) => {
+        pickup.age_s += DT_SECONDS;
+        if (pickup.age_s >= PICKUP.lifetime_s) {
+          events.push({ type:"pickup_expired", tick:game.tick, pickup_id:pickup.id, kind:pickup.kind });
+          return false;
+        }
+        pickup.x += pickup.vx * DT_SECONDS;
+        pickup.y += pickup.vy * DT_SECONDS;
+        if (pickup.x < arena.left || pickup.x > arena.right) { pickup.vx *= -1; pickup.x = clamp(pickup.x, arena.left, arena.right); }
+        if (pickup.y < PICKUP.y_min || pickup.y > PICKUP.y_max) { pickup.vy *= -1; pickup.y = clamp(pickup.y, PICKUP.y_min, PICKUP.y_max); }
+        if (!overlaps({ x:pickup.x, y:pickup.y, w:PICKUP.box.w, h:PICKUP.box.h }, game.player)) return true;
+        applyPickup(game, pickup, events);
+        return false;
+      });
+    }
+
+    function applyPickup(game, pickup, events) {
+      const before = pickup.kind === "bomb" ? game.bomb.charges : game.weaponLevel;
+      if (pickup.kind === "bomb") {
+        game.bomb.charges = Math.min(BOMB.max_charges, game.bomb.charges + 1);
+        game.counters.bombPickups += 1;
+      } else {
+        game.weaponLevel = Math.min(WEAPON.max_level, game.weaponLevel + 1);
+        game.counters.weaponPickups += 1;
+      }
+      const after = pickup.kind === "bomb" ? game.bomb.charges : game.weaponLevel;
+      events.push({ type:"pickup_collected", tick:game.tick, pickup_id:pickup.id, kind:pickup.kind, before, after });
     }
 
     function enemyShoot(game, events) {
@@ -931,7 +1055,7 @@
 
     function launchMissile(game, command, events) {
       if (!command || command.fire !== "shoot" || !game.enemies.length) return;
-      if (game.missileClock_s > 0 || game.playerMissiles.length >= MISSILE.max_active) return;
+      if (game.missileClock_s > 0 || game.playerMissiles.length >= missileCap(game)) return;
       const origin = { x:game.player.x, y:game.player.y - 12 };
       const target = missileTarget(game, origin);
       const missile = { id:entityId(game, "missile"), x:origin.x, y:origin.y, heading:-Math.PI / 2, age_s:0, target_id:target.enemy.id, decision_id:command.decision_id ?? null };
@@ -1055,9 +1179,11 @@
       if (game.player.invincible_s > 0) game.player.invincible_s = Math.max(0, game.player.invincible_s - DT_SECONDS);
 
       game.playerBullets = game.playerBullets.filter((shot) => {
+        shot.x += (shot.vx || 0) * DT_SECONDS;
         shot.y += shot.vy * DT_SECONDS;
-        return shot.y > -15;
+        return shot.y > -15 && shot.x > -15 && shot.x < WIDTH + 15;
       });
+      updatePickups(game, events);
       updateMissiles(game, events);
 
       game.enemyBullets = game.enemyBullets.filter((enemyShot) => {
@@ -1289,6 +1415,9 @@
         playerMissiles: game.playerMissiles,
         missileClock_s: game.missileClock_s,
         bomb: game.bomb,
+        weaponLevel: game.weaponLevel,
+        pickups: game.pickups,
+        pickupClock_s: game.pickupClock_s,
         enemyBullets: game.enemyBullets,
         enemies: game.enemies,
         terminal: game.terminal,
@@ -1334,6 +1463,7 @@
         score: game.score,
         bomb_charges: game.bomb.charges,
         active_missiles: game.playerMissiles.length,
+        weapon_level: game.weaponLevel,
         game_over: Boolean(game.terminal),
         counters: clone(game.counters),
       };
@@ -1344,7 +1474,7 @@
     }
 
     globalThis.SpaceDecisionCore = Object.freeze({
-      ENGINE_VERSION, DT_MS, ACTION_IDS, FIRE_IDS, BOMB_IDS, MISSILE, BOMB, LEASE_TICKS, LEASE_MS, RULES, DEFAULT_DIFFICULTY, HARDEST_DIFFICULTY,
+      ENGINE_VERSION, DT_MS, ACTION_IDS, FIRE_IDS, BOMB_IDS, MISSILE, BOMB, WEAPON, PICKUP, LEASE_TICKS, LEASE_MS, RULES, DEFAULT_DIFFICULTY, HARDEST_DIFFICULTY,
       createGame, stepGame, coordinateAction, stepPolicyTick, observeGame, serializeGame, restoreGame, hashGame, gameStatus,
       normalizeDifficulty, arenaFor, velocityFor, waveProfile, baseEnemyCountForWave, enemyCountForWave,
       fireIntervalForDifficulty, bulletSpeedForDifficulty, rulesManifest,
@@ -1359,8 +1489,8 @@
 
     const CONTROLLER_VERSION = "space-djev-controller-v2";
     const SCHEMA_VERSION = 1;
-    const PROMPT_VERSION = "djev-authoritative-v4";
-    const CONTEXT_VERSION = "djev-observation-v4";
+    const PROMPT_VERSION = "djev-authoritative-v5";
+    const CONTEXT_VERSION = "djev-observation-v5";
     const MAX_RESPONSE_AGE_MS = 600;
     const ACTION_IDS = globalThis.SpaceDecisionCore.ACTION_IDS;
     const FIRE_IDS = globalThis.SpaceDecisionCore.FIRE_IDS;
@@ -1883,6 +2013,9 @@
 
     function updateRecentFromEvents(events) {
       for (const event of events) {
+        if (event.type === "pickup_collected") {
+          addHistory("pickup", `${event.kind} pickup · ${event.before} → ${event.after}`, "ok");
+        }
         if (event.type === "bomb_detonated") {
           bombFlash = { x:event.x, y:event.y, radius:event.radius_px, until:performance.now() + 450 };
           addHistory("bomb", `djev bomb · ${event.removed_bullet_ids.length} bullets · ${event.destroyed_enemy_ids.length} ships · ${event.charges_after} left`, "ok");
@@ -2157,7 +2290,9 @@
       $("hud-run").textContent = runId || "starting";
       $("hud-elapsed").textContent = (game.sim_ms / 1000).toFixed(1) + " s";
       $("hud-mode").textContent = game.terminal ? "ENDED" : paused ? "PAUSED" : autopilot ? "AUTO" : "MANUAL";
-      $("hud-bombs").textContent = "●".repeat(game.bomb.charges) + "○".repeat(Math.max(0, core.BOMB.charges - game.bomb.charges));
+      $("hud-bombs").textContent = "●".repeat(game.bomb.charges) + "○".repeat(Math.max(0, core.BOMB.max_charges - game.bomb.charges));
+      $("hud-weapon").textContent = `Lv ${game.weaponLevel} · ${core.WEAPON.spread_by_level[game.weaponLevel]}-way · ${Math.min(core.MISSILE.max_active_top, core.MISSILE.max_active + game.weaponLevel)} missiles`;
+      $("hud-pickups").textContent = `${game.counters.bombPickups} bomb · ${game.counters.weaponPickups} weapon`;
       $("hud-missiles").textContent = `${game.playerMissiles.length} · ${game.counters.missileKills} kills`;
       $("selected").textContent = lastSelected;
       $("executed").textContent = currentExecutingText();
@@ -2198,7 +2333,35 @@
       ctx.strokeStyle = "rgba(100,155,228,.08)";
       for (let x = 0; x < W; x += 80) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); }
       for (let y = 0; y < H; y += 80) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
-      game.playerBullets.forEach((shot) => { ctx.fillStyle = "#e8f1ff"; ctx.beginPath(); ctx.arc(shot.x, shot.y, shot.radius, 0, Math.PI * 2); ctx.fill(); });
+      const shotColors = ["#e8f1ff", "#8ff7c0", "#ffd36b", "#ff8bd1"];
+      game.playerBullets.forEach((shot) => { ctx.fillStyle = shotColors[shot.level || 0]; ctx.beginPath(); ctx.arc(shot.x, shot.y, shot.radius, 0, Math.PI * 2); ctx.fill(); });
+      const nowMs = performance.now();
+      game.pickups.forEach((pickup) => {
+        // Fade over the last seconds of life instead of vanishing.
+        const life = core.PICKUP.lifetime_s - pickup.age_s;
+        ctx.save();
+        ctx.globalAlpha = Math.max(0, Math.min(1, life / core.PICKUP.fade_s));
+        ctx.translate(pickup.x, pickup.y);
+        if (pickup.kind === "bomb") {
+          const pulse = 1 + Math.sin(nowMs / 160) * .08;
+          ctx.fillStyle = "#ff9447";
+          ctx.shadowColor = "#ffb454"; ctx.shadowBlur = 14;
+          ctx.beginPath(); ctx.arc(0, 0, 11 * pulse, 0, Math.PI * 2); ctx.fill();
+        } else {
+          ctx.rotate(nowMs / 500);
+          ctx.fillStyle = `hsl(${(pickup.hue + nowMs / 20) % 360},90%,62%)`;
+          ctx.shadowColor = ctx.fillStyle; ctx.shadowBlur = 14;
+          ctx.fillRect(-11, -11, 22, 22);
+          ctx.rotate(-nowMs / 500);
+        }
+        ctx.shadowBlur = 0;
+        ctx.fillStyle = "#08111f";
+        ctx.font = "800 12px Inter,sans-serif";
+        ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        ctx.fillText(pickup.kind === "bomb" ? "B" : "W", 0, 1);
+        ctx.restore();
+      });
+      ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
       game.enemyBullets.forEach((shot) => { ctx.fillStyle = shot.fast ? "#ffffff" : shot.sweep ? "#ffc86b" : "#ff7086"; ctx.beginPath(); ctx.arc(shot.x, shot.y, shot.radius, 0, Math.PI * 2); ctx.fill(); if (shot.fast) { ctx.strokeStyle = "#5ce1e6"; ctx.stroke(); } });
       game.playerMissiles.forEach((missile) => {
         ctx.save();

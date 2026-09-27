@@ -43,6 +43,11 @@ func oracleScore(label string) (tier int, score float64) {
 	if strings.Contains(label, "open space") {
 		score += 2
 	}
+	if strings.Contains(label, "collects ") {
+		score += 50
+	} else if strings.Contains(label, "toward bomb") || strings.Contains(label, "toward weapon") {
+		score += 5
+	}
 	if strings.Contains(label, "toward center") {
 		score++
 	}

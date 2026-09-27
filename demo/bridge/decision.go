@@ -8,8 +8,8 @@ import (
 
 const (
 	SchemaVersion        = 1
-	PromptVersion        = "djev-authoritative-v4"
-	ContextVersion       = "djev-observation-v4"
+	PromptVersion        = "djev-authoritative-v5"
+	ContextVersion       = "djev-observation-v5"
 	MaxModelLen          = 4096
 	ReservedOutputTokens = 512
 	DtMs                 = 1000.0 / 60.0
@@ -19,11 +19,12 @@ const (
 )
 
 var (
-	ActionIDs = []string{"hold", "left", "right", "up", "down", "up_left", "up_right", "down_left", "down_right"}
-	FireIDs   = []string{"shoot", "cease"}
-	IntentIDs = []string{"evade", "recover", "position"}
-	BombIDs   = []string{"hold", "detonate"}
-	PathIDs   = func() []string {
+	ActionIDs   = []string{"hold", "left", "right", "up", "down", "up_left", "up_right", "down_left", "down_right"}
+	FireIDs     = []string{"shoot", "cease"}
+	IntentIDs   = []string{"evade", "recover", "position"}
+	BombIDs     = []string{"hold", "detonate"}
+	PickupKinds = []string{"bomb", "weapon"}
+	PathIDs     = func() []string {
 		ids := make([]string, len(ActionIDs))
 		for i, movement := range ActionIDs {
 			ids[i] = movement + "__" + LivePathLease
@@ -59,7 +60,7 @@ const (
 	centerProgressPx = 15
 	pathInstructions = "Pick the move that keeps the ship alive. Each move starts with its tier number: 1 is best, 6 is worst. Always pick a move with the lowest tier number present. Within that tier prefer more escapes, then not stationary or reversing, then not near enemy, then open space, then toward center. If every move is tier 6, pick the one hit latest."
 	fireInstructions = "Choose shoot if enemy_count>0, otherwise cease. Shoot also launches homing missiles."
-	bombInstructions = "Pick the choice with rank 1. Charges do not refill."
+	bombInstructions = "Pick the choice with rank 1. Collect floating bomb pickups to refill charges."
 	// bombUrgentTier is the best path tier at which the detonate label reports that no safe move exists.
 	bombUrgentTier    = 5
 	intentInstruction = "Classify current intent."
@@ -285,6 +286,9 @@ type PathRow struct {
 	EscapeGapPx     *float64
 	EnemyGapPx      *float64
 	Motion          string
+	PickupCollect   string // wanted pickup this move's path touches, or ""
+	PickupToward    string // wanted pickup this move closes in on, or ""
+	PickupWanted    bool   // any move collects or approaches a wanted pickup
 }
 
 func pathTable(value any, player *packedPlayer, currentMovement string) ([]PathRow, error) {
@@ -346,7 +350,17 @@ func pathTable(value any, player *packedPlayer, currentMovement string) ([]PathR
 				return nil, err
 			}
 		}
+		collect, _, err := enumValue(prediction["pickup_collect"], name+".pickup_collect", PickupKinds, true)
+		if err != nil {
+			return nil, err
+		}
+		toward, _, err := enumValue(prediction["pickup_toward"], name+".pickup_toward", PickupKinds, true)
+		if err != nil {
+			return nil, err
+		}
 		rows = append(rows, PathRow{
+			PickupCollect:   collect,
+			PickupToward:    toward,
 			Path:            movement + "__" + LivePathLease,
 			Collision:       contact != nil,
 			GapRaw:          gapRaw,
@@ -359,6 +373,13 @@ func pathTable(value any, player *packedPlayer, currentMovement string) ([]PathR
 			EnemyGapPx:      enemyGap,
 			Motion:          motionRelation(movement, currentMovement),
 		})
+	}
+	wanted := false
+	for _, row := range rows {
+		wanted = wanted || row.PickupCollect != "" || row.PickupToward != ""
+	}
+	for i := range rows {
+		rows[i].PickupWanted = wanted
 	}
 	return rows, nil
 }
@@ -385,11 +406,34 @@ func pathTier(row PathRow) string {
 	// still, reversing, or ending near a wall costs one tier. Djev follows the leading tier
 	// number reliably but largely ignores within-tier word preferences.
 	if row.Motion == "stationary" || row.Motion == "reverses" || row.WallRoom < nearWallRoomPx {
-		switch tier {
-		case "GOOD":
-			tier = "OK"
-		case "OK":
-			tier = "RISKY"
+		tier = shiftTier(tier, 1)
+	}
+	// Supplies are a strategic goal, so they live in the rank Djev follows: collecting a wanted
+	// pickup lifts a safe move one tier, and while one is reachable, safe moves that ignore it
+	// drop one. With only the collect bonus Djev gathered 24 of 96 pickups and survived 3/6
+	// lockstep runs; with pursuit, 41 of 101 and 5/6.
+	switch {
+	case row.PickupCollect != "":
+		tier = shiftTier(tier, -1)
+	case row.PickupWanted && row.PickupToward == "":
+		tier = shiftTier(tier, 1)
+	}
+	return tier
+}
+
+// shiftTier moves among the safe tiers only: GOOD, OK, RISKY.
+func shiftTier(tier string, delta int) string {
+	order := []string{"GOOD", "OK", "RISKY"}
+	for i, name := range order {
+		if name == tier {
+			j := i + delta
+			if j < 0 {
+				j = 0
+			}
+			if j >= len(order) {
+				j = len(order) - 1
+			}
+			return order[j]
 		}
 	}
 	return tier
@@ -420,6 +464,11 @@ func pathLabel(row PathRow) string {
 	}
 	if row.WallRoom < nearWallRoomPx {
 		parts = append(parts, "near wall")
+	}
+	if row.PickupCollect != "" {
+		parts = append(parts, "collects "+row.PickupCollect)
+	} else if row.PickupToward != "" {
+		parts = append(parts, "toward "+row.PickupToward)
 	}
 	switch {
 	case row.Crowd <= 1:
@@ -463,7 +512,7 @@ func buildPathCriteria(request *DecisionRequest) (*OrderedMap, int, error) {
 
 // BombFacts is the validated state.bomb observation.
 type BombFacts struct {
-	Charges, RadiusPx, Bullets, Enemies int64
+	Charges, MaxCharges, RadiusPx, Bullets, Enemies int64
 }
 
 func bombFacts(value any) (BombFacts, error) {
@@ -472,7 +521,7 @@ func bombFacts(value any) (BombFacts, error) {
 		return BombFacts{}, err
 	}
 	var facts BombFacts
-	for key, target := range map[string]*int64{"charges": &facts.Charges, "radius_px": &facts.RadiusPx, "bullets_in_radius": &facts.Bullets, "enemies_in_radius": &facts.Enemies} {
+	for key, target := range map[string]*int64{"charges": &facts.Charges, "max_charges": &facts.MaxCharges, "radius_px": &facts.RadiusPx, "bullets_in_radius": &facts.Bullets, "enemies_in_radius": &facts.Enemies} {
 		if *target, err = nonnegativeInt(object[key], "bomb."+key); err != nil {
 			return BombFacts{}, err
 		}
