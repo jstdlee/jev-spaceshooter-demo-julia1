@@ -440,6 +440,18 @@ func TestPickupLabelsAndRanks(t *testing.T) {
 	if got := criteria.Get("up_left__medium"); got != "Tier 2 OK: 6/9 escapes, tight gap, near enemy, toward weapon, busy space, continues." {
 		t.Fatalf("toward: %q", got)
 	}
+	medium(body, 6)["pickup_collect"] = "weapon"
+	medium(body, 6)["escape_clearance_px"] = json.Number("14.9")
+	criteria, _, err = buildPathCriteria(requestFor(t, body))
+	must(t, err)
+	if got := criteria.Get("up_right__medium"); got != "Tier 1 GOOD: 6/9 escapes, grazing gap, near enemy, collects weapon (power up), busy space, continues." {
+		t.Fatalf("weapon block lifts two tiers: %q", got)
+	}
+	delete(medium(body, 6), "pickup_collect")
+	medium(body, 6)["pickup_collect"] = nil
+	medium(body, 6)["escape_clearance_px"] = json.Number("28.75")
+	criteria, _, err = buildPathCriteria(requestFor(t, body))
+	must(t, err)
 	// Pursuit: while a wanted pickup is reachable, safe moves that ignore it drop a tier.
 	if got := criteria.Get("up_right__medium"); got != "Tier 3 RISKY: 6/9 escapes, tight gap, near enemy, busy space, continues." {
 		t.Fatalf("ignoring the pickup: %q", got)

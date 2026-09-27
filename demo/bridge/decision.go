@@ -413,6 +413,9 @@ func pathTier(row PathRow) string {
 	// drop one. With only the collect bonus Djev gathered 24 of 96 pickups and survived 3/6
 	// lockstep runs; with pursuit, 41 of 101 and 5/6.
 	switch {
+	case row.PickupCollect == "weapon":
+		// Upgrading firepower is the proactive goal: a weapon block lifts a safe move two tiers.
+		tier = shiftTier(tier, -2)
 	case row.PickupCollect != "":
 		tier = shiftTier(tier, -1)
 	case row.PickupWanted && row.PickupToward == "":
@@ -465,7 +468,9 @@ func pathLabel(row PathRow) string {
 	if row.WallRoom < nearWallRoomPx {
 		parts = append(parts, "near wall")
 	}
-	if row.PickupCollect != "" {
+	if row.PickupCollect == "weapon" {
+		parts = append(parts, "collects weapon (power up)")
+	} else if row.PickupCollect != "" {
 		parts = append(parts, "collects "+row.PickupCollect)
 	} else if row.PickupToward != "" {
 		parts = append(parts, "toward "+row.PickupToward)
