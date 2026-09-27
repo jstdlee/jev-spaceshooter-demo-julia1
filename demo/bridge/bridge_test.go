@@ -260,11 +260,6 @@ func TestCenterProgressAndNullGapLabels(t *testing.T) {
 		prediction["clearance_px"] = nil
 		prediction["escape_clearance_px"] = nil
 		request := requestFor(t, body)
-		packed, err := packModelContext(request)
-		must(t, err)
-		if packed.Get("hold_gap_px") != nil {
-			t.Fatal("hold_gap_px must be null")
-		}
 		criteria, _, err := buildPathCriteria(request)
 		must(t, err)
 		want := "Tier 3 RISKY: 6/9 escapes, open gap, near enemy, busy space, stationary"
@@ -274,32 +269,17 @@ func TestCenterProgressAndNullGapLabels(t *testing.T) {
 		if criteria.Get("hold__medium") != want+"." {
 			t.Fatalf("end_y %s: %q", tc.endY, criteria.Get("hold__medium"))
 		}
-		playerKeys := packed.Get("player").(*OrderedMap).Keys()
-		if !reflect.DeepEqual(playerKeys, []string{"x", "y", "w", "h", "lives", "cooldown_ms", "invulnerability_ms"}) {
-			t.Fatalf("player keys %v", playerKeys)
-		}
 	}
 }
 
-func TestInsideCenterRegionUsesInclusiveBoundaries(t *testing.T) {
-	cases := []struct {
-		x, y   string
-		inside bool
-	}{
-		{"480", "310", true}, {"360", "230", true}, {"600", "390", true}, {"360", "390", true}, {"600", "230", true},
-		{"359.99", "310", false}, {"600.01", "310", false}, {"480", "229.99", false}, {"480", "390.01", false},
-		{"10", "9", false}, {"950", "611", false},
+func TestModelStateIsOnlyEnemyCount(t *testing.T) {
+	// Every choice carries its own facts; extra numeric state cost ~80 ms of Djev latency per call.
+	packed, err := packModelContext(requestFor(t, decisionBody(t, "lean")))
+	must(t, err)
+	if !reflect.DeepEqual(packed.Keys(), []string{"enemy_count"}) {
+		t.Fatalf("state keys %v", packed.Keys())
 	}
-	for _, tc := range cases {
-		body := decisionBody(t, "region")
-		player := body["state"].(map[string]any)["player"].(map[string]any)
-		player["x"], player["y"] = json.Number(tc.x), json.Number(tc.y)
-		packed, err := packModelContext(requestFor(t, body))
-		must(t, err)
-		if packed.Get("inside_center_region") != tc.inside {
-			t.Fatalf("(%s,%s) inside=%v", tc.x, tc.y, packed.Get("inside_center_region"))
-		}
-	}
+	assertJSON(t, packed.Get("enemy_count"), 6)
 }
 
 func TestHoldCollisionAndMoveContactLabels(t *testing.T) {
@@ -313,11 +293,8 @@ func TestHoldCollisionAndMoveContactLabels(t *testing.T) {
 			candidates[i], candidates[j] = candidates[j], candidates[i]
 		}
 		request := requestFor(t, body)
-		packed, err := packModelContext(request)
+		_, err := packModelContext(request)
 		must(t, err)
-		if packed.Get("hold_collision") != (contact != nil) {
-			t.Fatalf("hold_collision for %v", contact)
-		}
 		criteria, _, err := buildPathCriteria(request)
 		must(t, err)
 		if criteria.Keys()[0] != "hold__medium" {
@@ -331,8 +308,6 @@ func TestHoldCollisionAndMoveContactLabels(t *testing.T) {
 		if criteria.Get("hold__medium") != want {
 			t.Fatalf("contact %v: %q", contact, criteria.Get("hold__medium"))
 		}
-		assertJSON(t, packed.Get("hold_gap_px"), 28.75)
-		assertJSON(t, packed.Get("wait_collision_ms"), 999)
 	}
 }
 
@@ -354,9 +329,8 @@ func TestAllCollidingPathsKeepFixedOrder(t *testing.T) {
 			t.Fatalf("%s: %q", key, criteria.Get(key))
 		}
 	}
-	packed, err := packModelContext(request)
+	_, err = packModelContext(request)
 	must(t, err)
-	assertJSON(t, packed.Get("hold_gap_px"), -0.25)
 }
 
 func TestPathTiersRankContactEscapesWallsGapsAndEnemyDistance(t *testing.T) {
@@ -562,7 +536,7 @@ func TestInvalidIntentIsAtomicAndRawLogged(t *testing.T) {
 	cases := []struct {
 		intent string
 		err    string
-	}{{"", "missing_intent"}, {`"recover"`, "invalid_intent_answer"}, {`{"choice":"retreat","confidence":0.9}`, "unknown_intent_choice"}, {`{"choice":1}`, "invalid_intent_choice_type"}}
+	}{{`"recover"`, "invalid_intent_answer"}, {`{"choice":"retreat","confidence":0.9}`, "unknown_intent_choice"}, {`{"choice":1}`, "invalid_intent_choice_type"}}
 	for sequence, tc := range cases {
 		intent := ""
 		if tc.intent != "" {
@@ -656,10 +630,10 @@ func TestExactRequestBodyPrecedesTransportAndMatchesWire(t *testing.T) {
 				t.Errorf("request record must precede transport with exact wire body")
 			}
 			sent := decode(t, string(wire))
-			if !reflect.DeepEqual(keysInWireOrder(t, wire, "state"), []string{"player", "inside_center_region", "hold_collision", "wait_ms", "wait_collision_ms", "enemy_count", "hold_gap_px", "bomb_charges"}) {
+			if !reflect.DeepEqual(keysInWireOrder(t, wire, "state"), []string{"enemy_count"}) {
 				t.Errorf("state key order %v", keysInWireOrder(t, wire, "state"))
 			}
-			if !reflect.DeepEqual(keysInWireOrder(t, wire, "questions"), []string{"intent", "path", "fire", "bomb"}) {
+			if !reflect.DeepEqual(keysInWireOrder(t, wire, "questions"), []string{"path", "fire", "bomb"}) {
 				t.Errorf("question order")
 			}
 			path := sent["questions"].(map[string]any)["path"].(map[string]any)["criteria"].(map[string]any)
@@ -775,15 +749,14 @@ func TestDecisionSendsCompactContextAndExcludesCheckpoint(t *testing.T) {
 		"hold":     "Rank 1 SAVE: a tier 2 move exists. Keeps 3 charges.",
 		"detonate": "Rank 2 WASTE: a tier 2 move exists; destroys 4 bullets and 1 enemy ships within 200 px; 2 charges left after.",
 	})
-	assertJSON(t, payload["state"], decode(t, `{"player":{"x":480.12,"y":408.34,"w":20,"h":18,"lives":3,"cooldown_ms":40.25,"invulnerability_ms":0},
-		"inside_center_region":false,"hold_collision":false,"wait_ms":260,"wait_collision_ms":null,"enemy_count":6,"hold_gap_px":28.75,"bomb_charges":3}`))
+	assertJSON(t, payload["state"], decode(t, `{"enemy_count":6}`))
 	for _, forbidden := range []string{"checkpoint", "rng_state", "seed", "old-decision"} {
 		if strings.Contains(string(wire), forbidden) {
 			t.Fatalf("payload leaked %q", forbidden)
 		}
 	}
-	if !strings.Contains(string(wire), `"state":{"player":{"x":480.12,"y":408.34,"w":20,"h":18,"lives":3,"cooldown_ms":40.25,"invulnerability_ms":0}`) {
-		t.Fatal("observed numbers must keep their original spelling on the wire")
+	if !strings.Contains(string(wire), `"state":{"enemy_count":6}`) {
+		t.Fatal("state must reach the wire as the observed enemy count only")
 	}
 	records := f.records(runID)
 	request := records[1]

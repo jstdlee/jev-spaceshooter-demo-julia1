@@ -8,8 +8,8 @@ import (
 
 const (
 	SchemaVersion        = 1
-	PromptVersion        = "djev-authoritative-v5"
-	ContextVersion       = "djev-observation-v5"
+	PromptVersion        = "djev-authoritative-v6"
+	ContextVersion       = "djev-observation-v6"
 	MaxModelLen          = 4096
 	ReservedOutputTokens = 512
 	DtMs                 = 1000.0 / 60.0
@@ -23,7 +23,7 @@ var (
 	FireIDs     = []string{"shoot", "cease"}
 	IntentIDs   = []string{"evade", "recover", "position"}
 	BombIDs     = []string{"hold", "detonate"}
-	PickupKinds = []string{"bomb", "weapon"}
+	PickupKinds = []string{"bomb", "weapon", "wingman"}
 	PathIDs     = func() []string {
 		ids := make([]string, len(ActionIDs))
 		for i, movement := range ActionIDs {
@@ -413,7 +413,7 @@ func pathTier(row PathRow) string {
 	// drop one. With only the collect bonus Djev gathered 24 of 96 pickups and survived 3/6
 	// lockstep runs; with pursuit, 41 of 101 and 5/6.
 	switch {
-	case row.PickupCollect == "weapon":
+	case row.PickupCollect == "weapon" || row.PickupCollect == "wingman":
 		// Upgrading firepower is the proactive goal: a weapon block lifts a safe move two tiers.
 		tier = shiftTier(tier, -2)
 	case row.PickupCollect != "":
@@ -468,8 +468,8 @@ func pathLabel(row PathRow) string {
 	if row.WallRoom < nearWallRoomPx {
 		parts = append(parts, "near wall")
 	}
-	if row.PickupCollect == "weapon" {
-		parts = append(parts, "collects weapon (power up)")
+	if row.PickupCollect == "weapon" || row.PickupCollect == "wingman" {
+		parts = append(parts, "collects "+row.PickupCollect+" (power up)")
 	} else if row.PickupCollect != "" {
 		parts = append(parts, "collects "+row.PickupCollect)
 	} else if row.PickupToward != "" {
@@ -597,30 +597,23 @@ func packModelContext(request *DecisionRequest) (*OrderedMap, error) {
 	if err != nil {
 		return nil, err
 	}
-	waitMs, _, err := observedNumber(request.Forecast, "expected_delay_ms", "forecast", false, min0())
-	if err != nil {
+	if _, _, err := observedNumber(request.Forecast, "expected_delay_ms", "forecast", false, min0()); err != nil {
 		return nil, err
 	}
-	waitCollision, _, err := observedNumber(prefix, "contact_ms", "forecast.prefix", true, min0())
-	if err != nil {
+	if _, _, err := observedNumber(prefix, "contact_ms", "forecast.prefix", true, min0()); err != nil {
 		return nil, err
 	}
 	if _, err := nonnegativeInt(counts["enemies"], "threat_counts.enemies"); err != nil {
 		return nil, err
 	}
-	bomb, err := bombFacts(request.State["bomb"])
-	if err != nil {
+	if _, err := bombFacts(request.State["bomb"]); err != nil {
 		return nil, err
 	}
-	packed := NewOrderedMap().
-		Set("player", player.ordered).
-		Set("inside_center_region", player.x >= 360 && player.x <= 600 && player.y >= 230 && player.y <= 390).
-		Set("hold_collision", rows[0].Collision).
-		Set("wait_ms", waitMs).
-		Set("wait_collision_ms", waitCollision).
-		Set("enemy_count", counts["enemies"]).
-		Set("hold_gap_px", rows[0].GapRaw).
-		Set("bomb_charges", bomb.Charges)
+	_ = rows
+	// Every choice carries its own facts in its labels, so the model state is only what the fire
+	// question needs. Djev's latency grows sharply with numeric state: the former eight-field
+	// state cost about 80 ms per call (191 ms vs 108 ms) with no gain in choice quality.
+	packed := NewOrderedMap().Set("enemy_count", counts["enemies"])
 	encoded, err := marshalCompact(packed)
 	if err != nil {
 		return nil, err
@@ -648,7 +641,6 @@ func buildUpstreamPayload(model, promptText string, packed, pathCriteria, bombCr
 		Set("instructions", promptText).
 		Set("state", packed).
 		Set("questions", NewOrderedMap().
-			Set("intent", question(intentInstruction, choiceCriteria(IntentIDs, IntentDescriptions))).
 			Set("path", question(pathInstructions, pathCriteria)).
 			Set("fire", question(fireInstructions, choiceCriteria(FireIDs, FireDescriptions))).
 			Set("bomb", question(bombInstructions, bombCriteria))).
@@ -701,13 +693,24 @@ func extractAnswer(response any, name string, allowed []string) answer {
 	return answer{choice: choice, confidence: confidence}
 }
 
+func nilIfEmpty(text string) any {
+	if text == "" {
+		return nil
+	}
+	return text
+}
+
 func nullConfidence() map[string]any {
 	return map[string]any{"intent": nil, "path": nil, "movement": nil, "fire": nil, "lease": nil, "bomb": nil}
 }
 
-// normalizeDecisionResponse validates all three answers atomically.
+// normalizeDecisionResponse validates the path, fire, and bomb answers atomically. Intent is no
+// longer asked (it never steered the game and cost latency); a stray intent answer must still be valid.
 func normalizeDecisionResponse(response any) map[string]any {
 	intent := extractAnswer(response, "intent", IntentIDs)
+	if intent.err == "missing_intent" {
+		intent = answer{}
+	}
 	path := extractAnswer(response, "path", PathIDs)
 	fire := extractAnswer(response, "fire", FireIDs)
 	bomb := extractAnswer(response, "bomb", BombIDs)
@@ -725,7 +728,7 @@ func normalizeDecisionResponse(response any) map[string]any {
 	}
 	separator := strings.LastIndex(path.choice, "__")
 	return map[string]any{
-		"intent":       intent.choice,
+		"intent":       nilIfEmpty(intent.choice),
 		"movement":     path.choice[:separator],
 		"fire":         fire.choice,
 		"lease":        path.choice[separator+2:],

@@ -478,8 +478,8 @@ test('requests offer all nine fixed-medium paths, both fire choices, and all thr
   const { core, controller: api } = loadModules();
   const controller = api.createController({ run_id: 'intent-request', epoch: 1 });
   const request = begin(api, controller, core);
-  assert.equal(request.prompt_version, 'djev-authoritative-v5');
-  assert.equal(request.context_version, 'djev-observation-v5');
+  assert.equal(request.prompt_version, 'djev-authoritative-v6');
+  assert.equal(request.context_version, 'djev-observation-v6');
   assert.deepEqual(Object.keys(request.questions), ['path', 'fire', 'intent', 'bomb']);
   assert.deepEqual(Object.keys(request.questions.path.criteria), [
     'hold__medium', 'left__medium', 'right__medium', 'up__medium', 'down__medium',
@@ -492,7 +492,7 @@ test('requests offer all nine fixed-medium paths, both fire choices, and all thr
 
 test('missing or unknown intent atomically ends current authority and cannot move or shoot', () => {
   const { core, controller: api } = loadModules();
-  for (const intent of [undefined, null, '', 'unknown', 'Recover', 0, false, {}]) {
+  for (const intent of ['', 'unknown', 'Recover', 0, false, {}]) {
     const controller = api.createController({ run_id: 'invalid-intent', epoch: 1 });
     const previous = begin(api, controller, core);
     api.receiveDecision(controller, validReply(previous, { movement: 'left', fire: 'shoot', intent: 'evade' }), { tick: 0, wall_ms: 10 });

@@ -7,8 +7,8 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { performance } = require('node:perf_hooks');
 
-const PROMPT_VERSION = 'djev-authoritative-v5';
-const CONTEXT_VERSION = 'djev-observation-v5';
+const PROMPT_VERSION = 'djev-authoritative-v6';
+const CONTEXT_VERSION = 'djev-observation-v6';
 const SCHEMA_VERSION = 1;
 const DT_MS = 1000 / 60;
 const STALE_RESPONSE_MS = 600;

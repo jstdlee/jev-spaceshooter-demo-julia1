@@ -111,8 +111,8 @@ test('strategy regression manifest is v2 dense-mid-speed and always non-gameplay
   const { core, manifest } = loadScenarioRuntime();
   assert.equal(manifest.prompt_version, PROMPT_VERSION);
   assert.equal(manifest.context_version, CONTEXT_VERSION);
-  assert.equal(manifest.prompt_version, 'djev-authoritative-v5');
-  assert.equal(manifest.context_version, 'djev-observation-v5');
+  assert.equal(manifest.prompt_version, 'djev-authoritative-v6');
+  assert.equal(manifest.context_version, 'djev-observation-v6');
   assert.equal(manifest.profile, 'dense-mid-speed');
   assert.deepEqual(manifest.difficulty, DENSE_MID_SPEED_PROFILE);
   assert.equal(manifest.mode, 'cli');
