@@ -266,7 +266,7 @@ func TestCenterProgressAndNullGapLabels(t *testing.T) {
 		}
 		criteria, _, err := buildPathCriteria(request)
 		must(t, err)
-		want := "Tier 2 OK: 6/9 escapes, open gap, near enemy, busy space, stationary"
+		want := "Tier 3 RISKY: 6/9 escapes, open gap, near enemy, busy space, stationary"
 		if tc.toward {
 			want += ", toward center"
 		}
@@ -322,7 +322,7 @@ func TestHoldCollisionAndMoveContactLabels(t *testing.T) {
 		if criteria.Keys()[0] != "hold__medium" {
 			t.Fatal("criteria must keep fixed movement order")
 		}
-		want := "Tier 2 OK: 6/9 escapes, tight gap, near enemy, busy space, stationary."
+		want := "Tier 3 RISKY: 6/9 escapes, tight gap, near enemy, busy space, stationary."
 		if contact != nil {
 			f, _ := numberValue(contact)
 			want = fmt.Sprintf("Tier 6 DEADLY: a threat hits the ship in %d ms.", int64(f))
@@ -359,50 +359,66 @@ func TestAllCollidingPathsKeepFixedOrder(t *testing.T) {
 }
 
 func TestPathTiersRankContactEscapesWallsGapsAndEnemyDistance(t *testing.T) {
+	// The fixture's hold row is stationary (one tier lower); "up" continues the executing command.
 	cases := []struct {
+		index  int
 		update string
 		want   string
 	}{
-		{`{"move_contact_ms":40.6}`, "Tier 6 DEADLY: a threat hits the ship in 40 ms."},
-		{`{"escape_options":0}`, "Tier 5 DOOMED: safe now, but every follow-up move is hit."},
-		{`{"edge_distances_px":{"left":461.456,"right":458.544,"top":397.654,"bottom":24.9}}`, "Tier 4 TRAP: ends pinned against the wall with no escape room."},
-		{`{"escape_options":1}`, "Tier 3 RISKY: 1/9 escapes, tight gap, near enemy, busy space, stationary."},
-		{`{"escape_clearance_px":14.9}`, "Tier 3 RISKY: 6/9 escapes, grazing gap, near enemy, busy space, stationary."},
-		{`{"escape_clearance_px":40,"enemy_clearance_px":110,"crowd_count":1}`, "Tier 1 GOOD: 6/9 escapes, open gap, open space, stationary."},
-		{`{"escape_clearance_px":40,"enemy_clearance_px":109.9}`, "Tier 2 OK: 6/9 escapes, open gap, near enemy, busy space, stationary."},
-		{`{"escape_clearance_px":40,"enemy_clearance_px":null,"crowd_count":4,"escape_options":3}`, "Tier 2 OK: 3/9 escapes, open gap, crowded, stationary."},
+		{0, `{"move_contact_ms":40.6}`, "Tier 6 DEADLY: a threat hits the ship in 40 ms."},
+		{0, `{"escape_options":0}`, "Tier 5 DOOMED: safe now, but every follow-up move is hit."},
+		{0, `{"edge_distances_px":{"left":461.456,"right":458.544,"top":397.654,"bottom":24.9}}`, "Tier 4 TRAP: ends pinned against the wall with no escape room."},
+		{3, `{"escape_options":1}`, "Tier 3 RISKY: 1/9 escapes, tight gap, near enemy, busy space, continues."},
+		{3, `{"escape_clearance_px":14.9}`, "Tier 3 RISKY: 6/9 escapes, grazing gap, near enemy, busy space, continues."},
+		{3, `{"escape_clearance_px":40,"enemy_clearance_px":110,"crowd_count":1}`, "Tier 1 GOOD: 6/9 escapes, open gap, open space, continues."},
+		{3, `{"escape_clearance_px":40,"enemy_clearance_px":109.9}`, "Tier 2 OK: 6/9 escapes, open gap, near enemy, busy space, continues."},
+		{3, `{"escape_clearance_px":40,"enemy_clearance_px":null,"crowd_count":4,"escape_options":3}`, "Tier 2 OK: 3/9 escapes, open gap, crowded, continues."},
+		{0, `{"escape_clearance_px":40,"enemy_clearance_px":110,"crowd_count":1}`, "Tier 2 OK: 6/9 escapes, open gap, open space, stationary."},
+		{4, `{"escape_clearance_px":40,"enemy_clearance_px":110,"crowd_count":1}`, "Tier 2 OK: 6/9 escapes, open gap, open space, reverses."},
+		{3, `{"escape_clearance_px":40,"enemy_clearance_px":110,"crowd_count":1,"edge_distances_px":{"left":461,"right":458,"top":69.9,"bottom":194}}`, "Tier 2 OK: 6/9 escapes, open gap, near wall, open space, continues."},
+		{0, `{}`, "Tier 3 RISKY: 6/9 escapes, tight gap, near enemy, busy space, stationary."},
 	}
 	for _, tc := range cases {
 		body := decisionBody(t, "tier")
 		for key, value := range decode(t, tc.update) {
-			medium(body, 0)[key] = value
+			medium(body, tc.index)[key] = value
 		}
 		criteria, _, err := buildPathCriteria(requestFor(t, body))
 		must(t, err)
-		if criteria.Get("hold__medium") != tc.want {
-			t.Fatalf("%s: got %q", tc.update, criteria.Get("hold__medium"))
+		if got := criteria.Get(PathIDs[tc.index]); got != tc.want {
+			t.Fatalf("%s %s: got %q", PathIDs[tc.index], tc.update, got)
 		}
 	}
 }
 
-func TestBombCriteriaStateFactsAndUrgency(t *testing.T) {
+func TestBombCriteriaRankUseOnlyWithoutSafeMove(t *testing.T) {
 	urgent := buildBombCriteria(BombFacts{Charges: 1, RadiusPx: 200, Bullets: 7, Enemies: 0}, 6)
-	if urgent.Get("detonate") != "Destroys 7 bullets and 0 enemy ships within 200 px; 0 charges left after. Every move is tier 5 or 6 right now." {
-		t.Fatalf("%q", urgent.Get("detonate"))
+	if urgent.Get("detonate") != "Rank 1 USE NOW: every move is tier 5 or 6; destroys 7 bullets and 0 enemy ships within 200 px; 0 charges left after." ||
+		urgent.Get("hold") != "Rank 2 WAIT: every move is tier 5 or 6; the ship is likely hit. Keeps 1 charges." {
+		t.Fatalf("urgent %q / %q", urgent.Get("detonate"), urgent.Get("hold"))
 	}
 	if !reflect.DeepEqual(urgent.Keys(), BombIDs) {
 		t.Fatalf("bomb choice order %v", urgent.Keys())
 	}
-	empty := buildBombCriteria(BombFacts{Charges: 0, RadiusPx: 200, Bullets: 7}, 6)
-	if empty.Get("detonate") != "No charges left; detonating does nothing." {
-		t.Fatalf("%q", empty.Get("detonate"))
-	}
-	if oracleBomb(map[string]any{"detonate": urgent.Get("detonate")}) != "detonate" || oracleBomb(map[string]any{"detonate": empty.Get("detonate")}) != "hold" {
-		t.Fatal("oracle must follow the bomb rule")
-	}
 	calm := buildBombCriteria(BombFacts{Charges: 2, RadiusPx: 200, Bullets: 3, Enemies: 1}, 2)
-	if oracleBomb(map[string]any{"detonate": calm.Get("detonate")}) != "hold" {
-		t.Fatal("oracle must hold while a safe move exists")
+	if calm.Get("hold") != "Rank 1 SAVE: a tier 2 move exists. Keeps 2 charges." || calm.Get("detonate") != "Rank 2 WASTE: a tier 2 move exists; destroys 3 bullets and 1 enemy ships within 200 px; 1 charges left after." {
+		t.Fatalf("calm %q / %q", calm.Get("hold"), calm.Get("detonate"))
+	}
+	nothing := buildBombCriteria(BombFacts{Charges: 2, RadiusPx: 200}, 6)
+	if !strings.HasPrefix(nothing.Get("hold").(string), "Rank 1 SAVE: nothing is in range") {
+		t.Fatalf("empty blast must not rank first: %q", nothing.Get("hold"))
+	}
+	empty := buildBombCriteria(BombFacts{Charges: 0, RadiusPx: 200, Bullets: 7}, 6)
+	if empty.Get("hold") != "Rank 1: no charges left." {
+		t.Fatalf("%q", empty.Get("hold"))
+	}
+	for _, tc := range []struct {
+		criteria *OrderedMap
+		want     string
+	}{{urgent, "detonate"}, {calm, "hold"}, {nothing, "hold"}, {empty, "hold"}} {
+		if got := oracleBomb(map[string]any{"detonate": tc.criteria.Get("detonate")}); got != tc.want {
+			t.Fatalf("oracle chose %s, want %s", got, tc.want)
+		}
 	}
 	body := decisionBody(t, "bomb")
 	delete(body["state"].(map[string]any), "bomb")
@@ -700,7 +716,11 @@ func TestDecisionSendsCompactContextAndExcludesCheckpoint(t *testing.T) {
 		"up_left": "continues", "up_right": "continues", "down_left": "reverses", "down_right": "reverses"}
 	want := map[string]any{}
 	for _, movement := range ActionIDs {
-		label := fmt.Sprintf("Tier 2 OK: 6/9 escapes, tight gap, near enemy, busy space, %s.", motion[movement])
+		tier := "Tier 2 OK"
+		if motion[movement] == "stationary" || motion[movement] == "reverses" {
+			tier = "Tier 3 RISKY"
+		}
+		label := fmt.Sprintf("%s: 6/9 escapes, tight gap, near enemy, busy space, %s.", tier, motion[movement])
 		if movement == "left" {
 			label = "Tier 6 DEADLY: a threat hits the ship in 125 ms."
 		}
@@ -710,8 +730,8 @@ func TestDecisionSendsCompactContextAndExcludesCheckpoint(t *testing.T) {
 	assertJSON(t, questions["path"].(map[string]any)["criteria"], want)
 	assertJSON(t, questions["fire"].(map[string]any)["criteria"], map[string]any{"shoot": "Fire gun and homing missiles.", "cease": "Do not fire."})
 	assertJSON(t, questions["bomb"].(map[string]any)["criteria"], map[string]any{
-		"hold":     "Keep 3 charges for later. A tier 2 move exists.",
-		"detonate": "Destroys 4 bullets and 1 enemy ships within 200 px; 2 charges left after. A tier 2 move exists.",
+		"hold":     "Rank 1 SAVE: a tier 2 move exists. Keeps 3 charges.",
+		"detonate": "Rank 2 WASTE: a tier 2 move exists; destroys 4 bullets and 1 enemy ships within 200 px; 2 charges left after.",
 	})
 	assertJSON(t, payload["state"], decode(t, `{"player":{"x":480.12,"y":408.34,"w":20,"h":18,"lives":3,"cooldown_ms":40.25,"invulnerability_ms":0},
 		"inside_center_region":false,"hold_collision":false,"wait_ms":260,"wait_collision_ms":null,"enemy_count":6,"hold_gap_px":28.75,"bomb_charges":3}`))

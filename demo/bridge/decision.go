@@ -52,13 +52,14 @@ const (
 	openGapPx        = 40
 	tightGapPx       = 15
 	trapWallRoomPx   = 25
+	nearWallRoomPx   = 70
 	nearEnemyPx      = 110
 	goodMinEscapes   = 4
 	okMinEscapes     = 2
 	centerProgressPx = 15
 	pathInstructions = "Pick the move that keeps the ship alive. Each move starts with its tier number: 1 is best, 6 is worst. Always pick a move with the lowest tier number present. Within that tier prefer more escapes, then not stationary or reversing, then not near enemy, then open space, then toward center. If every move is tier 6, pick the one hit latest."
 	fireInstructions = "Choose shoot if enemy_count>0, otherwise cease. Shoot also launches homing missiles."
-	bombInstructions = "Detonate only when every move is tier 5 or 6 and the bomb destroys at least one threat. Otherwise hold; charges do not refill."
+	bombInstructions = "Pick the choice with rank 1. Charges do not refill."
 	// bombUrgentTier is the best path tier at which the detonate label reports that no safe move exists.
 	bombUrgentTier    = 5
 	intentInstruction = "Classify current intent."
@@ -374,13 +375,24 @@ func pathTier(row PathRow) string {
 		return "TRAP"
 	}
 	gap := row.EscapeGapPx
+	tier := "RISKY"
 	if row.EscapeOptions >= goodMinEscapes && (gap == nil || *gap >= openGapPx) && !row.nearEnemy() {
-		return "GOOD"
+		tier = "GOOD"
+	} else if row.EscapeOptions >= okMinEscapes && (gap == nil || *gap >= tightGapPx) {
+		tier = "OK"
 	}
-	if row.EscapeOptions >= okMinEscapes && (gap == nil || *gap >= tightGapPx) {
-		return "OK"
+	// Aimed shots converge where the ship was, and a wall halves the escape directions: holding
+	// still, reversing, or ending near a wall costs one tier. Djev follows the leading tier
+	// number reliably but largely ignores within-tier word preferences.
+	if row.Motion == "stationary" || row.Motion == "reverses" || row.WallRoom < nearWallRoomPx {
+		switch tier {
+		case "GOOD":
+			tier = "OK"
+		case "OK":
+			tier = "RISKY"
+		}
 	}
-	return "RISKY"
+	return tier
 }
 
 // pathLabel translates one path forecast into facts the model can compare without arithmetic.
@@ -405,6 +417,9 @@ func pathLabel(row PathRow) string {
 	parts := []string{fmt.Sprintf("%d/9 escapes", row.EscapeOptions), gapWord}
 	if row.nearEnemy() {
 		parts = append(parts, "near enemy")
+	}
+	if row.WallRoom < nearWallRoomPx {
+		parts = append(parts, "near wall")
 	}
 	switch {
 	case row.Crowd <= 1:
@@ -465,21 +480,28 @@ func bombFacts(value any) (BombFacts, error) {
 	return facts, nil
 }
 
-// buildBombCriteria states what detonating would do now and whether any safe move exists.
+// buildBombCriteria states what detonating would do now. Like paths, each choice leads with a
+// rank: detonate ranks first only when no move beats tier 5 and a blast would destroy something.
 func buildBombCriteria(facts BombFacts, bestTier int) *OrderedMap {
 	criteria := NewOrderedMap()
 	if facts.Charges == 0 {
-		criteria.Set("hold", "No charges left.")
-		criteria.Set("detonate", "No charges left; detonating does nothing.")
+		criteria.Set("hold", "Rank 1: no charges left.")
+		criteria.Set("detonate", "Rank 2: no charges left; detonating does nothing.")
 		return criteria
 	}
-	urgency := fmt.Sprintf("A tier %d move exists.", bestTier)
-	if bestTier >= bombUrgentTier {
-		urgency = "Every move is tier 5 or 6 right now."
+	blast := fmt.Sprintf("destroys %d bullets and %d enemy ships within %d px; %d charges left after",
+		facts.Bullets, facts.Enemies, facts.RadiusPx, facts.Charges-1)
+	if bestTier >= bombUrgentTier && facts.Bullets+facts.Enemies > 0 {
+		criteria.Set("hold", fmt.Sprintf("Rank 2 WAIT: every move is tier 5 or 6; the ship is likely hit. Keeps %d charges.", facts.Charges))
+		criteria.Set("detonate", "Rank 1 USE NOW: every move is tier 5 or 6; "+blast+".")
+		return criteria
 	}
-	criteria.Set("hold", fmt.Sprintf("Keep %d charges for later. %s", facts.Charges, urgency))
-	criteria.Set("detonate", fmt.Sprintf("Destroys %d bullets and %d enemy ships within %d px; %d charges left after. %s",
-		facts.Bullets, facts.Enemies, facts.RadiusPx, facts.Charges-1, urgency))
+	reason := fmt.Sprintf("a tier %d move exists", bestTier)
+	if facts.Bullets+facts.Enemies == 0 {
+		reason = "nothing is in range"
+	}
+	criteria.Set("hold", fmt.Sprintf("Rank 1 SAVE: %s. Keeps %d charges.", reason, facts.Charges))
+	criteria.Set("detonate", fmt.Sprintf("Rank 2 WASTE: %s; %s.", reason, blast))
 	return criteria
 }
 

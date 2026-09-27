@@ -93,10 +93,9 @@ func (oracleUpstream) Call(_ context.Context, body []byte) (*UpstreamResult, err
 	return okUpstream(raw), nil
 }
 
-// oracleBomb follows the bomb question's rule: no safe move, and the blast destroys something.
+// oracleBomb follows the bomb question's rule: pick the rank 1 choice.
 func oracleBomb(criteria map[string]any) string {
-	label, _ := criteria["detonate"].(string)
-	if strings.Contains(label, "Every move is tier 5 or 6") && !strings.HasPrefix(label, "Destroys 0 bullets and 0 enemy ships") && !strings.HasPrefix(label, "No charges") {
+	if label, _ := criteria["detonate"].(string); strings.HasPrefix(label, "Rank 1") {
 		return "detonate"
 	}
 	return "hold"

@@ -131,6 +131,8 @@ Tier 6 DEADLY: a threat hits the ship in 125 ms.
 | 2 OK | At least 2 clear follow-ups and at least a tight (≥15 px) gap |
 | 1 GOOD | At least 4 clear follow-ups, an open (≥40 px) gap, and ≥110 px from every enemy ship |
 
+A move that holds still, reverses the executing command, or ends within 70 px of a wall drops one tier (GOOD→OK, OK→RISKY). Djev follows the leading tier number about 97–99% of the time but largely ignored the same preferences when they were only words within a tier: about 20% of its picks held still or reversed, and it slid along walls.
+
 The remaining words are facts for choosing within a tier: the number of clear follow-up moves (`escapes`), the best continuation's bullet gap, whether the path passes within 110 px of an enemy ship (enemies fire point-blank as they drift down), how many threats will be within 110 px of the endpoint (`open space` / `busy space` / `crowded`), how the move relates to the command already executing (`stationary`, `continues`, `turns`, `reverses`; wave-1 enemies aim at the ship's current position), and `toward center` when the endpoint is at least 15 px closer to center.
 
 Why this encoding: measured on recorded states, Djev picked a path ending against a wall in 33% of decisions when given nine rows of raw numbers, even though it almost never picked `collision=true`; 9 of 11 hits were at a wall. Prose tiers cut below-best picks to about 8%; the leading tier number cut them to about 1%.
@@ -142,9 +144,15 @@ The current fire question asks the model to shoot when enemies exist; it is not 
 ### Missiles and bombs
 
 - **Homing missiles** launch automatically every 0.5 s (at most 4 in flight) while the active Djev command authorizes `shoot`. Each steers toward its target's predicted intercept point at up to 6 rad/s and 420 px/s, deals 1 damage, and expires after 2.5 s; if its target dies it re-targets the enemy with the shortest intercept time. Guidance is weapon physics, like a bullet's flight; Djev still decides whether to fire at all.
-- **Bombs**: 3 charges per run, never refilled. A detonation destroys every enemy bullet and enemy ship within 200 px of the ship. Djev decides with a fourth choice question (`hold` / `detonate`) whose labels state what a blast would destroy right now, how many charges remain, and whether any move better than tier 5 exists. A decision detonates at most once, even though its command lasts up to 500 ms.
+- **Bombs**: 3 charges per run, never refilled. A detonation destroys every enemy bullet and enemy ship within 200 px of the ship. Djev decides with a fourth choice question (`hold` / `detonate`). Like paths, each choice leads with a rank: `Rank 1 USE NOW` for detonate only when every move is tier 5 or 6 and the blast would destroy something, otherwise `Rank 1 SAVE` for hold; both state what a blast would destroy and how many charges remain. With the reasons only in prose, Djev detonated in 1 of 14 such emergencies. A decision detonates at most once, even though its command lasts up to 500 ms.
 
-In the deterministic lockstep simulation with a perfect label reader (below), adding them took the hardest profile from a 93 s mean (1 of 8 full runs) to 30 of 32 full 120 s runs across 220 ms and 350 ms latency.
+Results (hardest = 4× bullets, 3× enemies, 85% fast bullets at 2.4×):
+
+| Controller | Before missiles/bombs | After |
+| --- | --- | --- |
+| Perfect label reader, lockstep sim, hardest | 93 s mean, 1/8 full | 16/16 full 120 s runs |
+| Djev, lockstep sim, browser 3.5×/2.75× settings | died at ~40 s live | 5/6 full, shortest 97.9 s |
+| Djev, real-time CLI benchmark, hardest (seeds 20260920, 7, 11) | 29 s on seed 20260920 | 106 s, 121 s, 121 s |
 
 ### Tactical priorities sent to djev
 
