@@ -200,7 +200,7 @@
   (() => {
     "use strict";
 
-    const ENGINE_VERSION = "space-decision-core-v9";
+    const ENGINE_VERSION = "space-decision-core-v10";
     const DT_MS = 1000 / 60;
     const DT_SECONDS = 1 / 60;
     const WIDTH = 960;
@@ -378,7 +378,15 @@
       };
     }
 
-    function startWave(game) {
+    // Clearing every tenth wave grants one extra life, up to EXTRA_LIFE.max_lives.
+    const EXTRA_LIFE = Object.freeze({ every_waves:10, max_lives:5 });
+
+    function startWave(game, events = game.events) {
+      if (game.wave > 1 && (game.wave - 1) % EXTRA_LIFE.every_waves === 0 && game.player.lives < EXTRA_LIFE.max_lives) {
+        game.player.lives += 1;
+        game.player.maxLives = Math.max(game.player.maxLives, game.player.lives);
+        events.push({ type:"extra_life", tick:game.tick, wave:game.wave, lives:game.player.lives });
+      }
       game.profile = waveProfile(game.wave);
       const count = enemyCountForWave(game.wave, game.profile, game.difficulty);
       game.enemies = Array.from({ length: count }, (_, index) => createEnemy(game, game.profile.enemyType, index, count));
@@ -387,7 +395,7 @@
       game.waveClock_s = 0;
       game.waveActive = true;
       game.counters.wavesStarted += 1;
-      game.events.push({ type:"wave_started", tick:game.tick, wave:game.wave, enemyType:game.profile.enemyType, count });
+      events.push({ type:"wave_started", tick:game.tick, wave:game.wave, enemyType:game.profile.enemyType, count });
     }
 
     function createGame(manifest = {}) {
@@ -519,8 +527,19 @@
       return enter <= exit + 1e-12 ? segment.t0 + enter : null;
     }
 
+    // Labels only distinguish clearances below ~110 px, so anything provably farther than this is
+    // reported as its cheap lower bound instead of the exact minimum.
+    const CLEARANCE_EXACT_PX = 150;
+
+    function minAbsOverInterval(start, rate, duration) {
+      const end = start + rate * duration;
+      return start * end <= 0 ? 0 : Math.min(Math.abs(start), Math.abs(end));
+    }
+
     function segmentClearance(segment, threat, halfExtents) {
       const r = relativeMotion(segment, threat);
+      const lower = Math.max(minAbsOverInterval(r.rx, r.vx, r.duration) - halfExtents.x, minAbsOverInterval(r.ry, r.vy, r.duration) - halfExtents.y, 0);
+      if (lower >= CLEARANCE_EXACT_PX) return lower;
       const lines = [
         [r.vx, r.rx - halfExtents.x], [-r.vx, -r.rx - halfExtents.x],
         [r.vy, r.ry - halfExtents.y], [-r.vy, -r.ry - halfExtents.y], [0, 0],
@@ -728,9 +747,23 @@
       return best;
     }
 
-    function forecastPath(game, movement, lease, expectedDelayMs, activeCommand) {
+    // Threats whose straight path never comes within the ship's reach plus CLEARANCE_EXACT_PX over
+    // the forecast window cannot change any contact, escape, crowding, or label threshold, so the
+    // per-move forecasts skip them. This bounds forecast cost as the arena fills up.
+    function relevantThreats(game, windowMs) {
+      const seconds = windowMs / 1000;
+      const reach = PLAYER_SPEED * seconds + CLEARANCE_EXACT_PX + Math.hypot(PLAYER_W, PLAYER_H) / 2;
+      return hostileThreats(game).filter((threat) => {
+        const rx = threat.x - game.player.x;
+        const ry = threat.y - game.player.y;
+        const speed2 = threat.vx * threat.vx + threat.vy * threat.vy;
+        const t = speed2 > 0 ? clamp(-(rx * threat.vx + ry * threat.vy) / speed2, 0, seconds) : 0;
+        return Math.hypot(rx + threat.vx * t, ry + threat.vy * t) <= reach + Math.hypot(threat.w, threat.h) / 2;
+      });
+    }
+
+    function forecastPath(game, movement, lease, expectedDelayMs, activeCommand, threats = hostileThreats(game), withShotEta = true) {
       const arena = arenaFor(game);
-      const threats = hostileThreats(game);
       const currentEnemies = threats.filter((threat) => threat.kind === "enemy");
       const horizonMs = Math.max(FORECAST_MIN_HORIZON_MS, expectedDelayMs + LEASE_MS.medium);
       const leaseEndMs = expectedDelayMs + LEASE_MS[lease];
@@ -764,7 +797,7 @@
         }
       }
       let cooldownMs = cooldownAfterPrefix(game, expectedDelayMs, activeCommand);
-      for (let shotTickMs = expectedDelayMs; shotTickMs < leaseEndMs - 1e-9; shotTickMs += DT_MS) {
+      for (let shotTickMs = expectedDelayMs; withShotEta && shotTickMs < leaseEndMs - 1e-9; shotTickMs += DT_MS) {
         const nextTickMs = Math.min(leaseEndMs, shotTickMs + DT_MS);
         cooldownMs = Math.max(0, cooldownMs - (nextTickMs - shotTickMs));
         if (cooldownMs <= 0) {
@@ -798,9 +831,8 @@
     }
 
     // Two-step look-ahead: after this move's lease, how many follow-up moves stay clear of current threats?
-    function escapeForecast(game, movement, expectedDelayMs, activeCommand) {
+    function escapeForecast(game, movement, expectedDelayMs, activeCommand, threats = hostileThreats(game)) {
       const arena = arenaFor(game);
-      const threats = hostileThreats(game);
       const legStartMs = expectedDelayMs + LEASE_MS.medium;
       const firstLeg = buildForecastSegments(game, movement, "medium", expectedDelayMs, activeCommand, legStartMs);
       const cursor = pointAtSegments(firstLeg, legStartMs);
@@ -860,8 +892,7 @@
       return { collect:collect ? collect.kind : null, toward:nearest && nearest.progress >= PICKUP_PROGRESS_PX ? nearest.kind : null };
     }
 
-    function forecastPrefix(game, expectedDelayMs, activeCommand) {
-      const threats = hostileThreats(game);
+    function forecastPrefix(game, expectedDelayMs, activeCommand, threats = hostileThreats(game)) {
       const segments = buildForecastSegments(game, "hold", null, expectedDelayMs, activeCommand, expectedDelayMs);
       let firstContact = null;
       for (const segment of segments) {
@@ -874,7 +905,10 @@
       return { contact_ms:firstContact };
     }
 
+    // `detail` adds the short-lease forecast and shot ETAs. No label uses them, and they were half the
+    // forecast cost, so live decisions skip them; tests and debugging can opt back in.
     function observeGame(game, context = {}) {
+      const detail = context.detail === true;
       const expectedDelayMs = Number.isFinite(context.expected_delay_ms) ? Math.max(0, context.expected_delay_ms) : 260;
       const activeCommand = context.active_command || null;
       const threats = hostileThreats(game);
@@ -892,11 +926,12 @@
           h: rounded(threat.h),
         }));
       const horizonMs = Math.max(FORECAST_MIN_HORIZON_MS, expectedDelayMs + LEASE_MS.medium);
-      const prefix = forecastPrefix(game, expectedDelayMs, activeCommand);
+      const nearby = relevantThreats(game, Math.max(horizonMs, expectedDelayMs + LEASE_MS.medium + ESCAPE_LEG_MS));
+      const prefix = forecastPrefix(game, expectedDelayMs, activeCommand, nearby);
       const candidates = ACTION_IDS.map((id) => {
-        const short = forecastPath(game, id, "short", expectedDelayMs, activeCommand);
-        const medium = forecastPath(game, id, "medium", expectedDelayMs, activeCommand);
-        const escape = escapeForecast(game, id, expectedDelayMs, activeCommand);
+        const short = detail ? forecastPath(game, id, "short", expectedDelayMs, activeCommand, nearby) : null;
+        const medium = forecastPath(game, id, "medium", expectedDelayMs, activeCommand, nearby, detail);
+        const escape = escapeForecast(game, id, expectedDelayMs, activeCommand, nearby);
         const pickup = pickupForecast(game, id, expectedDelayMs, activeCommand);
         const project = (forecast) => ({
           endpoint: { x:rounded(forecast.endpoint.x), y:rounded(forecast.endpoint.y) },
@@ -915,7 +950,7 @@
           wall_clamped: forecast.wall_clamped,
         });
         const escapeClearance = escape.escape_clearance_px === null || !Number.isFinite(escape.escape_clearance_px) ? null : rounded(escape.escape_clearance_px);
-        return { id, short:project(short), medium:{ ...project(medium), move_contact_ms:escape.move_contact_ms === null ? null : rounded(escape.move_contact_ms), escape_options:escape.escape_options, escape_clearance_px:escapeClearance, pickup_collect:pickup.collect, pickup_toward:pickup.toward } };
+        return { id, ...(short ? { short:project(short) } : {}), medium:{ ...project(medium), move_contact_ms:escape.move_contact_ms === null ? null : rounded(escape.move_contact_ms), escape_options:escape.escape_options, escape_clearance_px:escapeClearance, pickup_collect:pickup.collect, pickup_toward:pickup.toward } };
       });
       const state = {
         tick: game.tick,
@@ -1495,7 +1530,7 @@
       if (!game.enemies.length && game.waveActive && !game.terminal) {
         game.waveActive = false;
         game.wave += 1;
-        startWave(game);
+        startWave(game, events);
       }
       game.tick += 1;
       game.sim_ms = game.tick * DT_MS;
@@ -2288,6 +2323,7 @@
     function updateRecentFromEvents(events) {
       for (const event of events) {
         if (event.type === "boss_spawned") addHistory("boss", "boss incoming", "warn");
+        if (event.type === "extra_life") addHistory("life", `wave ${event.wave} bonus · ${event.lives} lives`, "ok");
         if (event.type === "boss_destroyed") addHistory("boss", `boss destroyed by ${event.source}`, "ok");
         if (event.type === "pickup_collected") {
           addHistory("pickup", `${event.kind} pickup · ${event.before} → ${event.after}`, "ok");
@@ -2560,11 +2596,15 @@
       });
     }
 
+    let lastPanelAt = -Infinity;
+    let renderedDecisionKey = null;
+
+    // The decision widgets rebuild only when a new djev answer arrives; frame() calls this at 10 Hz.
     function updatePanel(now = performance.now()) {
       const observation = lastObservation || currentObservation();
       $("hud-wave").textContent = game.wave;
       $("hud-score").textContent = game.score.toLocaleString();
-      $("hud-lives").textContent = "♥".repeat(Math.max(0, game.player.lives)) + "♡".repeat(Math.max(0, 3 - game.player.lives));
+      $("hud-lives").textContent = "♥".repeat(Math.max(0, game.player.lives)) + "♡".repeat(Math.max(0, game.player.maxLives - game.player.lives));
       $("hud-run").textContent = runId || "starting";
       $("hud-elapsed").textContent = (game.sim_ms / 1000).toFixed(1) + " s";
       $("hud-mode").textContent = game.terminal ? "ENDED" : paused ? "PAUSED" : autopilot ? "AUTO" : "MANUAL";
@@ -2579,8 +2619,12 @@
       $("trace-path").textContent = tracePath;
       $("qualification").textContent = qualification.valid ? qualification.reason : `invalid · ${qualification.reason}`;
 
-      renderNavComputer(observation);
-      renderOrdnance();
+      const decisionKey = lastApi.labels ? `${lastApi.decision_id}` : `local:${observation.state.tick}`;
+      if (decisionKey !== renderedDecisionKey) {
+        renderedDecisionKey = decisionKey;
+        renderNavComputer(observation);
+        renderOrdnance();
+      }
       const stats = djev.latencyStats(controller);
       const completedRate = completionEvents.filter((at) => at > wallMs() - 10000).length / 10;
       $("metric-latency").textContent = stats.expected_delay_ms.toFixed(1);
@@ -2838,7 +2882,10 @@
     function frame(now) {
       update(now);
       draw();
-      updatePanel(now);
+      if (now - lastPanelAt >= 100) {
+        lastPanelAt = now;
+        updatePanel(now);
+      }
       requestAnimationFrame(frame);
     }
 

@@ -141,6 +141,7 @@ function cleanForecastGame(core, overrides = {}) {
 
 function observeForForecast(core, game, context = {}) {
   return core.observeGame(game, {
+    detail: true,
     expected_delay_ms: context.expected_delay_ms ?? 100,
     latency_samples: 0,
     latency_spread_ms: 0,
@@ -674,6 +675,7 @@ test('difficulty settings preserve the hardest profile and doubled baseline fire
   assert.equal(status.wave, 1);
   assert.equal(status.game_over, false);
   const observed = core.observeGame(game, {
+    detail: true,
     expected_delay_ms: 260,
     active_command: null,
     recent_commands: [],
@@ -686,6 +688,7 @@ test('all movement and lease pairs stay visible even when candidates collide or 
   const { core } = loadModules();
   const game = core.createGame(makeManifest());
   const observed = core.observeGame(game, {
+    detail: true,
     expected_delay_ms: 260,
     active_command: null,
     recent_commands: [],
@@ -1000,6 +1003,20 @@ test('a bomb clears threats within its radius once per decision and consumes one
   assert.equal(game.wingmen, 1);
   assert.equal(game.bomb.charges, 0);
   assert.equal(game.counters.jetSacrifices, 1);
+});
+
+test('clearing every tenth wave grants one extra life, up to five', () => {
+  const { core } = loadModules();
+  const game = cleanForecastGame(core, { x: 480, y: 550 });
+  const clearWave = (wave) => { game.wave = wave; game.waveActive = true; game.enemies = []; return core.stepGame(game, null).events; };
+  assert.equal(game.player.lives, 3);
+  assert.ok(!clearWave(5).some((e) => e.type === 'extra_life'));
+  assert.ok(clearWave(10).some((e) => e.type === 'extra_life' && e.lives === 4));
+  assert.equal(game.wave, 11);
+  clearWave(20);
+  assert.equal(game.player.lives, 5);
+  clearWave(30);
+  assert.equal(game.player.lives, 5, 'lives cap at five');
 });
 
 test('a new wave keeps bullets in flight instead of clearing them', () => {
