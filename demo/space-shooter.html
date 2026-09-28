@@ -473,7 +473,7 @@
   (() => {
     "use strict";
 
-    const ENGINE_VERSION = "space-decision-core-v12";
+    const ENGINE_VERSION = "space-decision-core-v13";
     const DT_MS = 1000 / 60;
     const DT_SECONDS = 1 / 60;
     const WIDTH = 960;
@@ -529,7 +529,9 @@
     // Kinds: bomb (+1 bomb charge), weapon (+1 weapon level), wingman (+1 escort jet), missile ("M": +1 missile cap).
     const PICKUP = Object.freeze({ box:{ w:24, h:24 }, lifetime_s:14, fade_s:2, speed:55, y_min:260, y_max:560,
       magnet_radius_px:110, magnet_min_speed_px_s:180, magnet_speed_px_s:280, magnet_accel_px_s2:900, magnet_reach_s:.6, magnet_forecast_margin_px:4,
-      spawn_interval_s:{ bomb:11, weapon:17, wingman:16, missile:15 }, first_spawn_s:{ bomb:6, weapon:9, wingman:14, missile:12 } });
+      spawn_interval_s:{ bomb:11, weapon:17, wingman:16, missile:15 }, first_spawn_s:{ bomb:6, weapon:9, wingman:14, missile:12 },
+      // Pickups appear at a seeded random spot near the ship: spawn_near_px from it, then kept inside the drift band.
+      spawn_near_px:{ min:140, max:260 } });
     const PICKUP_KINDS = Object.freeze(Object.keys(PICKUP.spawn_interval_s));
     // Up to eight little escort jets ring the ship, each facing its own direction (degrees, 0 = right, 90 = down).
     // Their shots destroy enemies and also enemy bullets and missiles; the first two add a missile to each salvo.
@@ -762,6 +764,7 @@
           bossesDestroyed: 0,
           enemyMissilesFired: 0,
           enemyMissilesDestroyed: 0,
+          missileIntercepts: 0,
           splashBursts: 0,
           splashDamaged: 0,
           splashKills: 0,
@@ -1427,11 +1430,13 @@
 
     function spawnPickup(game, kind, events) {
       const angle = randomRange(game, 0, Math.PI * 2);
+      const place = randomRange(game, 0, Math.PI * 2);
+      const distance = randomRange(game, PICKUP.spawn_near_px.min, PICKUP.spawn_near_px.max);
       const pickup = {
         id: entityId(game, "pickup"),
         kind,
-        x: randomRange(game, 80, WIDTH - 80),
-        y: randomRange(game, PICKUP.y_min + 20, PICKUP.y_max - 60),
+        x: clamp(game.player.x + Math.cos(place) * distance, 80, WIDTH - 80),
+        y: clamp(game.player.y + Math.sin(place) * distance, PICKUP.y_min + 20, PICKUP.y_max - 20),
         vx: Math.cos(angle) * PICKUP.speed,
         vy: Math.sin(angle) * PICKUP.speed,
         age_s: 0,
@@ -1611,20 +1616,44 @@
       return times.length ? Math.min(...times) : null;
     }
 
+    // Enemy missiles are the first priority: each untaken one (shortest intercept wins) gets an interceptor.
+    // With none left untaken, the nearest-by-intercept enemy ship is the target (ships may be shared).
+    function enemyMissileVelocity(missile) {
+      return { vx:Math.cos(missile.heading) * ENEMY_MISSILE.speed, vy:Math.sin(missile.heading) * ENEMY_MISSILE.speed };
+    }
+
     function missileTarget(game, origin, exclude = new Set()) {
+      let threat = null;
+      for (const hostile of game.enemyMissiles) {
+        if (exclude.has(hostile.id)) continue;
+        const v = enemyMissileVelocity(hostile);
+        const t = interceptTime(origin, MISSILE.speed, { x:hostile.x, y:hostile.y, vx:v.vx, vy:v.vy }) ?? Math.hypot(hostile.x - origin.x, hostile.y - origin.y) / MISSILE.speed;
+        if (!threat || t < threat.t || t === threat.t && String(hostile.id) < String(threat.enemy.id)) threat = { enemy:hostile, t, v, kind:"missile" };
+      }
+      if (threat) return threat;
       let best = null;
       for (const enemy of game.enemies) {
         if (exclude.has(enemy.id) && exclude.size < game.enemies.length) continue;
         const v = enemyVelocity(game, enemy);
         const t = interceptTime(origin, MISSILE.speed, { x:enemy.x, y:enemy.y, vx:v.vx, vy:v.vy }) ?? Math.hypot(enemy.x - origin.x, enemy.y - origin.y) / MISSILE.speed;
-        if (!best || t < best.t || t === best.t && String(enemy.id) < String(best.enemy.id)) best = { enemy, t, v };
+        if (!best || t < best.t || t === best.t && String(enemy.id) < String(best.enemy.id)) best = { enemy, t, v, kind:"ship" };
       }
       return best;
     }
 
+    // The live target of a homing missile (an enemy ship or an enemy missile) with its velocity, or null.
+    function homingTarget(game, missile) {
+      if (missile.target_kind === "missile") {
+        const hostile = game.enemyMissiles.find((m) => m.id === missile.target_id);
+        return hostile ? { enemy:hostile, v:enemyMissileVelocity(hostile), kind:"missile" } : null;
+      }
+      const enemy = game.enemies.find((e) => e.id === missile.target_id);
+      return enemy ? { enemy, v:enemyVelocity(game, enemy), kind:"ship" } : null;
+    }
+
     // Higher weapon levels fire a fanned salvo; each missile in a salvo takes a different target when it can.
     function launchMissile(game, command, events) {
-      if (!command || command.fire !== "shoot" || !game.enemies.length || game.missileClock_s > 0) return;
+      if (!command || command.fire !== "shoot" || (!game.enemies.length && !game.enemyMissiles.length) || game.missileClock_s > 0) return;
       // Escort missile slots keep their share; the ship's salvo gives way so the total stays within salvo_total_max.
       const escortSlots = Math.min(game.wingmen, WINGMAN.missile_slots);
       const salvo = Math.min(WEAPON.missile_salvo_by_level[game.weaponLevel], WEAPON.salvo_total_max - escortSlots);
@@ -1632,13 +1661,14 @@
       // A classic salvo fans salvo_fan_rad per missile; the swarm spreads its missiles evenly over +-swarm_fan_rad.
       const fanStep = swarm && salvo > 1 ? WEAPON.swarm_fan_rad / ((salvo - 1) / 2) : WEAPON.salvo_fan_rad;
       const spacing = swarm ? 6 : 10;
-      const taken = new Set();
+      const taken = new Set(game.playerMissiles.filter((m) => m.target_kind === "missile").map((m) => m.target_id));
       for (let i = 0; i < salvo && game.playerMissiles.length < missileCap(game); i += 1) {
         const offset = salvo > 1 ? (i - (salvo - 1) / 2) : 0;
         const origin = { x:game.player.x + offset * spacing, y:game.player.y - 12 };
         const target = missileTarget(game, origin, taken);
+        if (!target) break;
         taken.add(target.enemy.id);
-        const missile = { id:entityId(game, "missile"), x:origin.x, y:origin.y, heading:-Math.PI / 2 + offset * fanStep, age_s:0, target_id:target.enemy.id, decision_id:command.decision_id ?? null, slot:swarm ? 3 : Math.min(i, 2) };
+        const missile = { id:entityId(game, "missile"), x:origin.x, y:origin.y, heading:-Math.PI / 2 + offset * fanStep, age_s:0, target_id:target.enemy.id, target_kind:target.kind, decision_id:command.decision_id ?? null, slot:swarm ? 3 : Math.min(i, 2) };
         game.playerMissiles.push(missile);
         game.counters.missileLaunches += 1;
         events.push({ type:"missile_launch", tick:game.tick, missile_id:missile.id, target_id:missile.target_id, decision_id:missile.decision_id, salvo });
@@ -1646,8 +1676,9 @@
       for (const wing of wingmanPositions(game).slice(0, WINGMAN.missile_slots)) {
         if (game.playerMissiles.length >= missileCap(game)) break;
         const target = missileTarget(game, wing, taken);
+        if (!target) break;
         taken.add(target.enemy.id);
-        const missile = { id:entityId(game, "missile"), x:wing.x, y:wing.y - 8, heading:-Math.PI / 2 + wing.side * WEAPON.salvo_fan_rad, age_s:0, target_id:target.enemy.id, decision_id:command.decision_id ?? null, slot:2 };
+        const missile = { id:entityId(game, "missile"), x:wing.x, y:wing.y - 8, heading:-Math.PI / 2 + wing.side * WEAPON.salvo_fan_rad, age_s:0, target_id:target.enemy.id, target_kind:target.kind, decision_id:command.decision_id ?? null, slot:2 };
         game.playerMissiles.push(missile);
         game.counters.missileLaunches += 1;
         events.push({ type:"missile_launch", tick:game.tick, missile_id:missile.id, target_id:missile.target_id, decision_id:missile.decision_id, salvo, wingman:wing.side });
@@ -1664,14 +1695,22 @@
           events.push({ type:"missile_expired", tick:game.tick, missile_id:missile.id });
           return false;
         }
-        let target = game.enemies.find((enemy) => enemy.id === missile.target_id);
-        if (!target && game.enemies.length) {
-          target = missileTarget(game, missile).enemy;
-          missile.target_id = target.id;
-          events.push({ type:"missile_retarget", tick:game.tick, missile_id:missile.id, target_id:target.id });
+        let current = homingTarget(game, missile);
+        // Retarget when the target is gone, or when an enemy missile appears that no interceptor is chasing yet.
+        const chased = new Set(game.playerMissiles.filter((m) => m !== missile && m.target_kind === "missile").map((m) => m.target_id));
+        const untakenThreat = (!current || current.kind === "ship") && game.enemyMissiles.some((m) => !chased.has(m.id));
+        if (!current || untakenThreat) {
+          const next = missileTarget(game, missile, chased);
+          if (next && (!current || next.enemy.id !== current.enemy.id)) {
+            missile.target_id = next.enemy.id;
+            missile.target_kind = next.kind;
+            events.push({ type:"missile_retarget", tick:game.tick, missile_id:missile.id, target_id:next.enemy.id, target_kind:next.kind });
+            current = next;
+          }
         }
-        if (target) {
-          const v = enemyVelocity(game, target);
+        if (current) {
+          const target = current.enemy;
+          const v = current.v;
           const t = interceptTime(missile, MISSILE.speed, { x:target.x, y:target.y, vx:v.vx, vy:v.vy }) ?? 0;
           const desired = Math.atan2(target.y + v.vy * t - missile.y, target.x + v.vx * t - missile.x);
           let turn = desired - missile.heading;
@@ -1687,6 +1726,18 @@
     function resolveMissileHits(game, events) {
       for (let i = game.playerMissiles.length - 1; i >= 0; i -= 1) {
         const missile = game.playerMissiles[i];
+        const box = { x:missile.x, y:missile.y, w:MISSILE.box.w, h:MISSILE.box.h };
+        // A homing missile that touches an enemy missile destroys both.
+        const hostileIndex = game.enemyMissiles.findIndex((m) => overlaps(box, { x:m.x, y:m.y, w:ENEMY_MISSILE.box.w, h:ENEMY_MISSILE.box.h }));
+        if (hostileIndex >= 0) {
+          const hostile = game.enemyMissiles[hostileIndex];
+          game.playerMissiles.splice(i, 1);
+          game.enemyMissiles.splice(hostileIndex, 1);
+          game.counters.enemyMissilesDestroyed += 1;
+          game.counters.missileIntercepts += 1;
+          events.push({ type:"missile_intercept", tick:game.tick, missile_id:missile.id, target_id:hostile.id, x:hostile.x, y:hostile.y, decision_id:missile.decision_id });
+          continue;
+        }
         const index = game.enemies.findIndex((enemy) => overlaps({ x:missile.x, y:missile.y, w:MISSILE.box.w, h:MISSILE.box.h }, enemy));
         if (index < 0) continue;
         const enemy = game.enemies[index];

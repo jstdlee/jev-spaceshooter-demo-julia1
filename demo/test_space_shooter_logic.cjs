@@ -1851,3 +1851,46 @@ test('serialize, restore, and hash form a deterministic replay boundary', () => 
   assert.equal(core.hashGame(restored), core.hashGame(game));
   assert.deepEqual(core.serializeGame(restored), checkpoint);
 });
+
+test('pickups spawn at a seeded random spot near the ship, inside the drift band', () => {
+  const { core } = loadModules();
+  for (const ship of [{ x: 480, y: 500 }, { x: 120, y: 540 }, { x: 860, y: 300 }]) {
+    const game = quietGame(core, ship);
+    game.pickups = [];
+    game.pickupClock_s = { bomb: 0.001, weapon: 0.001, wingman: 99, missile: 0.001 };
+    core.stepGame(game, { movement: 'hold', fire: 'cease', decision_id: 'p', sequence: 1, source: 'djev' });
+    assert.equal(game.pickups.length, 3);
+    for (const p of game.pickups) {
+      const d = Math.hypot(p.x - game.player.x, p.y - game.player.y);
+      assert.ok(d <= core.PICKUP.spawn_near_px.max + 1, `within reach (${d.toFixed(0)} px)`);
+      assert.ok(p.y >= core.PICKUP.y_min && p.y <= core.PICKUP.y_max, 'inside the band');
+    }
+  }
+});
+
+test('homing missiles take enemy missiles first, intercept them, and retarget to new threats', () => {
+  const { core } = loadModules();
+  const game = quietGame(core, { x: 480, y: 540 });
+  game.missileClock_s = 0;
+  game.enemies = [{ ...scoutEnemy({ id: 'ship', x: 480, y: 420 }), hp: 999, maxHp: 999 }];
+  game.enemyMissiles = [{ id: 'threat', x: 700, y: 300, heading: Math.PI * 0.75, age_s: 0 }];
+  const shoot = { movement: 'hold', fire: 'shoot', decision_id: 'm', sequence: 1, source: 'djev' };
+  const launch = core.stepGame(game, shoot).events.filter((e) => e.type === 'missile_launch');
+  assert.ok(launch.length >= 1);
+  assert.equal(launch[0].target_id, 'threat', 'the enemy missile is the first target even though the ship is nearer');
+
+  // Fly on: the interceptor meets the enemy missile and both are destroyed.
+  let intercepted = false;
+  for (let tick = 0; tick < 120 && !intercepted; tick += 1) {
+    intercepted = core.stepGame(game, { ...shoot, fire: 'cease' }).events.some((e) => e.type === 'missile_intercept' && e.target_id === 'threat');
+  }
+  assert.ok(intercepted, 'intercepted');
+  assert.equal(game.enemyMissiles.length, 0);
+  assert.ok(game.counters.missileIntercepts >= 1);
+
+  // A missile chasing a ship switches to a newly appearing enemy missile nobody is chasing.
+  game.playerMissiles = [{ id: 'mine', x: 480, y: 480, heading: -Math.PI / 2, age_s: 0, target_id: 'ship', target_kind: 'ship', decision_id: null, slot: 0 }];
+  game.enemyMissiles = [{ id: 'late', x: 300, y: 350, heading: Math.PI * 0.4, age_s: 0 }];
+  const retarget = core.stepGame(game, { ...shoot, fire: 'cease' }).events.find((e) => e.type === 'missile_retarget');
+  assert.equal(retarget && retarget.target_id, 'late');
+});
