@@ -126,6 +126,8 @@ func (s *Server) Handler() http.Handler {
 				w.Header().Set("Cache-Control", "no-store")
 				w.Header().Set("Access-Control-Allow-Origin", "*")
 				w.Write(page)
+			case "/api/exchange":
+				s.serveExchange(w, r)
 			case "/health":
 				w.Header().Set("Content-Type", "application/json")
 				w.Write([]byte(`{"ok":true}`))

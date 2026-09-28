@@ -75,6 +75,8 @@ type Server struct {
 	runsMu   sync.Mutex
 	runs     map[string]*RunState
 	started  time.Time
+	// exchanges keeps recent upstream request/response bodies for the event-log detail view.
+	exchanges exchangeLog
 	// afterUpstreamLock is a test hook run after a decision acquires the run's upstream slot.
 	afterUpstreamLock func(*RunState)
 }
@@ -419,9 +421,12 @@ func (s *Server) HandleDecision(ctx context.Context, body any) (map[string]any, 
 	upstreamUTC := utcNow()
 	upstreamMono := s.monotonicMs()
 	upstreamStart := time.Now()
+	s.exchanges.add(Exchange{RunID: run.RunID, DecisionID: id, Sequence: request.Sequence,
+		Endpoint: safeEndpoint(s.cfg.DjevURL) + "/v1/systemone", RecordedAt: upstreamUTC, RequestBody: exactBody, Pending: true})
 	upstream, callErr := s.upstream.Call(ctx, wire)
 	if callErr != nil {
 		result := nullDecision(request, id, false, callErr.Error(), float64(time.Since(upstreamStart).Nanoseconds())/1e6)
+		s.exchanges.complete(run.RunID, request.Sequence, nil, nil, result["error"], round(float64(time.Since(upstreamStart).Nanoseconds())/1e6, 1))
 		run.eventMu.Lock()
 		run.invalidDecision++
 		run.eventMu.Unlock()
@@ -493,6 +498,7 @@ func (s *Server) HandleDecision(ctx context.Context, body any) (map[string]any, 
 	if upstream.Error != nil {
 		upstreamErr = *upstream.Error
 	}
+	s.exchanges.complete(run.RunID, request.Sequence, status, rawBody, upstreamErr, round(float64(time.Since(upstreamStart).Nanoseconds())/1e6, 1))
 	if err := run.appendRecord(map[string]any{
 		"record_type": "decision_response", "run_id": run.RunID, "decision_id": id,
 		"epoch": request.Epoch, "sequence": request.Sequence, "rawsnapshot": request.Raw,

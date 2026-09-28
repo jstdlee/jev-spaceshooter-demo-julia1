@@ -262,7 +262,7 @@ func TestCenterProgressAndNullGapLabels(t *testing.T) {
 		request := requestFor(t, body)
 		criteria, _, err := buildPathCriteria(request)
 		must(t, err)
-		want := "Tier 3 RISKY: 6/9 escapes, open gap, near enemy, busy space, stationary"
+		want := "Tier 3 RISKY: 6/9 escapes, open gap, near enemy, busy space"
 		if tc.toward {
 			want += ", toward center"
 		}
@@ -300,7 +300,7 @@ func TestHoldCollisionAndMoveContactLabels(t *testing.T) {
 		if criteria.Keys()[0] != "hold__medium" {
 			t.Fatal("criteria must keep fixed movement order")
 		}
-		want := "Tier 3 RISKY: 6/9 escapes, tight gap, near enemy, busy space, stationary."
+		want := "Tier 3 RISKY: 6/9 escapes, tight gap, near enemy, busy space."
 		if contact != nil {
 			f, _ := numberValue(contact)
 			want = fmt.Sprintf("Tier 6 DEADLY: a threat hits the ship in %d ms.", int64(f))
@@ -343,15 +343,15 @@ func TestPathTiersRankContactEscapesWallsGapsAndEnemyDistance(t *testing.T) {
 		{0, `{"move_contact_ms":40.6}`, "Tier 6 DEADLY: a threat hits the ship in 40 ms."},
 		{0, `{"escape_options":0}`, "Tier 5 DOOMED: safe now, but every follow-up move is hit."},
 		{0, `{"edge_distances_px":{"left":461.456,"right":458.544,"top":397.654,"bottom":24.9}}`, "Tier 4 TRAP: ends pinned against the wall with no escape room."},
-		{3, `{"escape_options":1}`, "Tier 3 RISKY: 1/9 escapes, tight gap, near enemy, busy space, continues."},
-		{3, `{"escape_clearance_px":14.9}`, "Tier 3 RISKY: 6/9 escapes, grazing gap, near enemy, busy space, continues."},
-		{3, `{"escape_clearance_px":40,"enemy_clearance_px":110,"crowd_count":1}`, "Tier 1 GOOD: 6/9 escapes, open gap, open space, continues."},
-		{3, `{"escape_clearance_px":40,"enemy_clearance_px":109.9}`, "Tier 2 OK: 6/9 escapes, open gap, near enemy, busy space, continues."},
-		{3, `{"escape_clearance_px":40,"enemy_clearance_px":null,"crowd_count":4,"escape_options":3}`, "Tier 2 OK: 3/9 escapes, open gap, crowded, continues."},
-		{0, `{"escape_clearance_px":40,"enemy_clearance_px":110,"crowd_count":1}`, "Tier 2 OK: 6/9 escapes, open gap, open space, stationary."},
-		{4, `{"escape_clearance_px":40,"enemy_clearance_px":110,"crowd_count":1}`, "Tier 2 OK: 6/9 escapes, open gap, open space, reverses."},
-		{3, `{"escape_clearance_px":40,"enemy_clearance_px":110,"crowd_count":1,"edge_distances_px":{"left":461,"right":458,"top":69.9,"bottom":194}}`, "Tier 2 OK: 6/9 escapes, open gap, near wall, open space, continues."},
-		{0, `{}`, "Tier 3 RISKY: 6/9 escapes, tight gap, near enemy, busy space, stationary."},
+		{3, `{"escape_options":1}`, "Tier 3 RISKY: 1/9 escapes, tight gap, near enemy, busy space, keeps course."},
+		{3, `{"escape_clearance_px":14.9}`, "Tier 3 RISKY: 6/9 escapes, grazing gap, near enemy, busy space, keeps course."},
+		{3, `{"escape_clearance_px":40,"enemy_clearance_px":110,"crowd_count":1}`, "Tier 1 GOOD: 6/9 escapes, open gap, open space, keeps course."},
+		{3, `{"escape_clearance_px":40,"enemy_clearance_px":109.9}`, "Tier 2 OK: 6/9 escapes, open gap, near enemy, busy space, keeps course."},
+		{3, `{"escape_clearance_px":40,"enemy_clearance_px":null,"crowd_count":4,"escape_options":3}`, "Tier 2 OK: 3/9 escapes, open gap, crowded, keeps course."},
+		{0, `{"escape_clearance_px":40,"enemy_clearance_px":110,"crowd_count":1}`, "Tier 2 OK: 6/9 escapes, open gap, open space."},
+		{4, `{"escape_clearance_px":40,"enemy_clearance_px":110,"crowd_count":1}`, "Tier 2 OK: 6/9 escapes, open gap, open space."},
+		{3, `{"escape_clearance_px":40,"enemy_clearance_px":110,"crowd_count":1,"edge_distances_px":{"left":461,"right":458,"top":69.9,"bottom":194}}`, "Tier 2 OK: 6/9 escapes, open gap, near wall, open space, keeps course."},
+		{0, `{}`, "Tier 3 RISKY: 6/9 escapes, tight gap, near enemy, busy space."},
 	}
 	for _, tc := range cases {
 		body := decisionBody(t, "tier")
@@ -412,17 +412,17 @@ func TestPickupLabelsAndRanks(t *testing.T) {
 	medium(body, 5)["pickup_toward"] = "weapon"
 	criteria, _, err := buildPathCriteria(requestFor(t, body))
 	must(t, err)
-	if got := criteria.Get("up__medium"); got != "Tier 1 GOOD: 6/9 escapes, tight gap, near enemy, collects bomb, busy space, continues." {
+	if got := criteria.Get("up__medium"); got != "Tier 1 GOOD: 6/9 escapes, tight gap, near enemy, collects bomb, busy space, keeps course." {
 		t.Fatalf("collect: %q", got)
 	}
-	if got := criteria.Get("up_left__medium"); got != "Tier 2 OK: 6/9 escapes, tight gap, near enemy, toward weapon, busy space, continues." {
+	if got := criteria.Get("up_left__medium"); got != "Tier 2 OK: 6/9 escapes, tight gap, near enemy, toward weapon, busy space, keeps course." {
 		t.Fatalf("toward: %q", got)
 	}
 	medium(body, 6)["pickup_collect"] = "weapon"
 	medium(body, 6)["escape_clearance_px"] = json.Number("14.9")
 	criteria, _, err = buildPathCriteria(requestFor(t, body))
 	must(t, err)
-	if got := criteria.Get("up_right__medium"); got != "Tier 1 GOOD: 6/9 escapes, grazing gap, near enemy, collects weapon (power up), busy space, continues." {
+	if got := criteria.Get("up_right__medium"); got != "Tier 1 GOOD: 6/9 escapes, grazing gap, near enemy, collects weapon (power up), busy space, keeps course." {
 		t.Fatalf("weapon block lifts two tiers: %q", got)
 	}
 	delete(medium(body, 6), "pickup_collect")
@@ -431,7 +431,7 @@ func TestPickupLabelsAndRanks(t *testing.T) {
 	criteria, _, err = buildPathCriteria(requestFor(t, body))
 	must(t, err)
 	// Pursuit: while a wanted pickup is reachable, safe moves that ignore it drop a tier.
-	if got := criteria.Get("up_right__medium"); got != "Tier 3 RISKY: 6/9 escapes, tight gap, near enemy, busy space, continues." {
+	if got := criteria.Get("up_right__medium"); got != "Tier 3 RISKY: 6/9 escapes, tight gap, near enemy, busy space, keeps course." {
 		t.Fatalf("ignoring the pickup: %q", got)
 	}
 	// Pickups never lift a move out of an unsafe tier.
@@ -740,7 +740,11 @@ func TestDecisionSendsCompactContextAndExcludesCheckpoint(t *testing.T) {
 		if motion[movement] == "stationary" || motion[movement] == "reverses" {
 			tier = "Tier 3 RISKY"
 		}
-		label := fmt.Sprintf("%s: 6/9 escapes, tight gap, near enemy, busy space, %s.", tier, motion[movement])
+		course := ""
+		if motion[movement] == "continues" {
+			course = ", keeps course"
+		}
+		label := fmt.Sprintf("%s: 6/9 escapes, tight gap, near enemy, busy space%s.", tier, course)
 		if movement == "left" {
 			label = "Tier 6 DEADLY: a threat hits the ship in 125 ms."
 		}

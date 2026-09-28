@@ -13,3 +13,4 @@ data/
 benchmark-results/
 runs/
 demo/runs/
+/bin/

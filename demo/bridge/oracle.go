@@ -34,7 +34,7 @@ func oracleScore(label string) (tier int, score float64) {
 		n, _ := strconv.Atoi(escapes[1])
 		score += float64(n) * 1000
 	}
-	if !strings.Contains(label, "stationary") && !strings.Contains(label, "reverses") {
+	if strings.Contains(label, "keeps course") {
 		score += 100
 	}
 	if !strings.Contains(label, "near enemy") {

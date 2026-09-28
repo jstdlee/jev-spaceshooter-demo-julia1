@@ -58,7 +58,7 @@ const (
 	goodMinEscapes   = 4
 	okMinEscapes     = 2
 	centerProgressPx = 15
-	pathInstructions = "Pick the move that keeps the ship alive. Each move starts with its tier number: 1 is best, 6 is worst. Always pick a move with the lowest tier number present. Within that tier prefer more escapes, then not stationary or reversing, then not near enemy, then open space, then toward center. If every move is tier 6, pick the one hit latest."
+	pathInstructions = "Pick the move that keeps the ship alive. Each move starts with its tier number: 1 is best, 6 is worst. Always pick a move with the lowest tier number present. Within that tier prefer more escapes, then keeps course, then not near enemy, then open space, then toward center. If every move is tier 6, pick the one hit latest."
 	fireInstructions = "Choose shoot if enemy_count>0, otherwise cease. Shoot also launches homing missiles."
 	bombInstructions = "Pick the choice with rank 1. Collect floating bomb pickups to refill charges."
 	// bombUrgentTier is the best path tier at which the detonate label reports that no safe move exists.
@@ -483,7 +483,11 @@ func pathLabel(row PathRow) string {
 	default:
 		parts = append(parts, "crowded")
 	}
-	parts = append(parts, motionWords[row.Motion])
+	// Julia 1 weighs every motion word about as heavily as the safety tier (for example it
+	// rates "stationary" above "continues"), so only the course-keeping fact is stated.
+	if row.Motion == "continues" {
+		parts = append(parts, "keeps course")
+	}
 	if row.CenterProgress > centerProgressPx {
 		parts = append(parts, "toward center")
 	}
@@ -651,11 +655,25 @@ func buildUpstreamPayload(model, promptText string, packed, pathCriteria, bombCr
 		Set("instructions", promptText).
 		Set("state", packed).
 		Set("questions", NewOrderedMap().
-			Set("path", question(pathInstructions, pathCriteria)).
+			Set("path", question(pathInstructions, pathCriteria).Set("option_questions", pathOptionQuestions())).
 			Set("fire", question(fireInstructions, choiceCriteria(FireIDs, FireDescriptions))).
 			Set("bomb", question(bombInstructions, bombCriteria))).
 		Set("samples", 1).
 		Set("steps", 1)
+}
+
+// pathOptionQuestions asks Julia 1 for two judgements of every path label, which the
+// julia-api combines as a weighted sum. "Right answer" picks well among safe moves but
+// ranks bad moves in the wrong order; the outcome score keeps danger ordered, so the
+// pair avoids deadly moves when an escape exists. Weight 3 was tuned offline on
+// recorded states (holdout: 100% deadly avoidance in crises, ~80% best tier overall).
+func pathOptionQuestions() []any {
+	return []any{
+		NewOrderedMap().Set("type", "noul").Set("instructions", "Is this the right answer?").Set("weight", 1),
+		NewOrderedMap().Set("type", "score").Set("instructions", "What happens to the ship?").
+			Set("levels", []any{"the ship is destroyed", "the ship is trapped", "the ship survives with difficulty", "the ship is completely safe"}).
+			Set("weight", 3),
+	}
 }
 
 type answer struct {

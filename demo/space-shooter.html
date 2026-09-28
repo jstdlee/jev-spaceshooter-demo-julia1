@@ -4,112 +4,227 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>djev-authoritative space shooter</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 8 8%22 shape-rendering=%22crispEdges%22%3E%3Cpath fill=%22%2300d8ff%22 d=%22M3 0h2v3h3v2H5v3H3V5H0V3h3z%22/%3E%3C/svg%3E" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@600;800&family=Share+Tech+Mono&display=swap" rel="stylesheet" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&display=swap" rel="stylesheet" />
   <style>
+    /* 16-colour arcade palette. Every colour on the page and in the arena comes from this set. */
     :root {
       color-scheme: dark;
-      --void:#02040a; --hull:#070d1a; --plate:#0a1426; --line:#16324f; --line-hot:#1f5b86;
-      --text:#d9f3ff; --muted:#6f8fb0; --cyan:#3ef2ff; --magenta:#ff3fd2; --amber:#ffcc4d; --red:#ff4d6d; --green:#46ffa8;
-      --t1:#46ffa8; --t2:#a8ff5a; --t3:#ffcc4d; --t4:#ff9a3d; --t5:#ff5c7a; --t6:#ff2d55;
-      --mono:"Share Tech Mono",ui-monospace,SFMono-Regular,Menlo,monospace; --display:Orbitron,"Share Tech Mono",system-ui,sans-serif;
+      --k:#000000; --n:#0b0d2e; --b:#1f2a7a; --c:#00d8ff; --t:#0a8ea0; --w:#ffffff; --g:#9aa3c7; --d:#3b3f63;
+      --r:#ff2a4d; --o:#ff8c1a; --y:#ffe23d; --l:#3dff6e; --e:#0f9c3a; --m:#ff3fd2; --p:#8a3dff; --s:#ffc9a0;
+      --void:var(--k); --hull:#10132e; --plate:#171b3d; --line:var(--d); --line-hot:var(--t);
+      --text:var(--s); --muted:var(--g); --cyan:var(--c); --magenta:var(--m); --amber:var(--y); --red:var(--r); --green:var(--l);
+      --t0:var(--g); --t1:var(--l); --t2:var(--y); --t3:var(--o); --t4:var(--m); --t5:var(--r); --t6:var(--r);
+      --pixel:"Press Start 2P",ui-monospace,monospace; --crt:VT323,ui-monospace,monospace;
+      --bevel:inset 2px 2px 0 rgba(255,255,255,.10), inset -2px -2px 0 rgba(0,0,0,.55);
     }
     * { box-sizing:border-box; }
-    body { margin:0; min-height:100vh; color:var(--text); font:13px/1.45 var(--mono); background:
-      radial-gradient(ellipse at 50% -20%,rgba(62,242,255,.16),transparent 55%),
-      radial-gradient(ellipse at 110% 110%,rgba(255,63,210,.10),transparent 45%),
-      repeating-linear-gradient(0deg,rgba(62,242,255,.025) 0 1px,transparent 1px 3px), var(--void); }
-    .shell { width:min(1440px,97vw); margin:14px auto 28px; }
-    /* Title bar */
-    header { display:flex; align-items:center; justify-content:space-between; gap:18px; padding:10px 16px; margin-bottom:12px;
-      border:1px solid var(--line); background:linear-gradient(90deg,rgba(62,242,255,.10),rgba(7,13,26,.9) 40%,rgba(255,63,210,.08));
-      clip-path:polygon(14px 0,100% 0,100% calc(100% - 14px),calc(100% - 14px) 100%,0 100%,0 14px); }
-    h1 { margin:0; font:800 clamp(18px,2.3vw,28px)/1.1 var(--display); letter-spacing:.08em; text-transform:uppercase;
-      background:linear-gradient(90deg,var(--cyan),#9ffcff 45%,var(--magenta)); -webkit-background-clip:text; background-clip:text; color:transparent; }
-    .eyebrow { color:var(--cyan); font:600 10px var(--display); letter-spacing:.3em; text-transform:uppercase; opacity:.85; }
-    .sub { color:var(--muted); max-width:640px; font-size:11px; }
-    .link { display:grid; grid-template-columns:auto auto; gap:2px 10px; align-items:center; font-size:11px; white-space:nowrap; }
-    .led { width:9px; height:9px; border-radius:50%; background:var(--muted); box-shadow:0 0 0 2px rgba(0,0,0,.4); display:inline-block; margin-right:6px; vertical-align:middle; }
-    .led.on { background:var(--green); box-shadow:0 0 10px var(--green); } .led.busy { background:var(--amber); box-shadow:0 0 10px var(--amber); } .led.off { background:var(--red); box-shadow:0 0 10px var(--red); }
-    .link b { font:800 18px var(--display); color:var(--cyan); letter-spacing:.04em; }
-    .spark { display:flex; align-items:flex-end; gap:2px; height:22px; grid-column:1 / -1; }
-    .spark i { flex:1; min-width:2px; background:linear-gradient(0deg,var(--cyan),var(--magenta)); opacity:.75; border-radius:1px; }
-    /* Frames */
-    .layout { display:grid; grid-template-columns:minmax(0,1.7fr) minmax(330px,.8fr); gap:12px; align-items:start; }
-    .panel { position:relative; background:linear-gradient(180deg,rgba(10,20,38,.94),rgba(4,9,18,.96)); border:1px solid var(--line);
-      clip-path:polygon(12px 0,100% 0,100% calc(100% - 12px),calc(100% - 12px) 100%,0 100%,0 12px); box-shadow:inset 0 0 40px rgba(62,242,255,.04); }
-    .panel::before { content:""; position:absolute; inset:0; pointer-events:none; border-top:2px solid rgba(62,242,255,.45); width:90px; }
-    #game-panel { overflow:hidden; }
-    .arena { position:relative; }
-    .arena::after { content:""; position:absolute; inset:8px; pointer-events:none; background:
-      linear-gradient(var(--cyan),var(--cyan)) top left/22px 2px no-repeat, linear-gradient(var(--cyan),var(--cyan)) top left/2px 22px no-repeat,
-      linear-gradient(var(--cyan),var(--cyan)) top right/22px 2px no-repeat, linear-gradient(var(--cyan),var(--cyan)) top right/2px 22px no-repeat,
-      linear-gradient(var(--magenta),var(--magenta)) bottom left/22px 2px no-repeat, linear-gradient(var(--magenta),var(--magenta)) bottom left/2px 22px no-repeat,
-      linear-gradient(var(--magenta),var(--magenta)) bottom right/22px 2px no-repeat, linear-gradient(var(--magenta),var(--magenta)) bottom right/2px 22px no-repeat; opacity:.8; }
-    canvas { width:100%; display:block; aspect-ratio:48/31; background:#020711; }
-    /* Gauges */
-    .hud { display:grid; grid-template-columns:repeat(5,1fr); gap:1px; background:var(--line); border-top:1px solid var(--line-hot); }
-    .hud > div { background:var(--hull); padding:8px 11px; min-width:0; }
-    .label { display:block; color:var(--muted); font:600 9px var(--display); letter-spacing:.18em; text-transform:uppercase; }
-    .value { display:block; margin-top:3px; font:800 15px var(--display); letter-spacing:.03em; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:#eafcff; }
-    #hud-lives { color:var(--red); text-shadow:0 0 10px rgba(255,77,109,.6); }
-    #hud-bombs { color:var(--amber); text-shadow:0 0 10px rgba(255,204,77,.5); letter-spacing:.12em; }
-    #hud-weapon, #hud-missiles, #hud-pickups { font:13px var(--mono); }
-    /* Controls */
-    .controls { display:flex; flex-wrap:wrap; align-items:center; gap:8px; padding:10px 12px; border-top:1px solid var(--line); background:rgba(2,6,14,.6); }
-    button { font:700 11px var(--display); letter-spacing:.14em; text-transform:uppercase; color:var(--cyan); background:rgba(62,242,255,.06);
-      border:1px solid rgba(62,242,255,.45); padding:9px 14px; cursor:pointer; clip-path:polygon(8px 0,100% 0,100% calc(100% - 8px),calc(100% - 8px) 100%,0 100%,0 8px); }
-    button:hover { background:rgba(62,242,255,.16); box-shadow:0 0 18px rgba(62,242,255,.35); color:#fff; }
-    #restart-button { color:var(--magenta); border-color:rgba(255,63,210,.5); background:rgba(255,63,210,.06); }
-    .controls .sub { font-size:10px; }
-    /* Decision deck under the arena */
-    .deck { display:grid; grid-template-columns:minmax(0,1.25fr) minmax(0,1fr); gap:0; border-top:1px solid var(--line); }
-    .deck > .section + .section { border-left:1px solid var(--line); }
-    @media (max-width:820px) { .deck { grid-template-columns:1fr; } .deck > .section + .section { border-left:0; border-top:1px solid var(--line); } }
-    .side { display:grid; gap:12px; }
-    .section { padding:12px 14px; min-width:0; }
-    .section + .section { border-top:1px solid var(--line); }
-    .section h2 { display:flex; align-items:center; gap:8px; margin:0 0 10px; font:800 11px var(--display); letter-spacing:.22em; text-transform:uppercase; color:var(--cyan); }
-    .section h2::before { content:""; width:7px; height:7px; background:var(--cyan); box-shadow:0 0 8px var(--cyan); transform:rotate(45deg); }
-    .section h2 small { margin-left:auto; color:var(--muted); font:10px var(--mono); letter-spacing:.05em; text-transform:none; }
-    /* Nav computer: 3x3 compass of the path labels djev chose from */
-    .nav { display:grid; grid-template-columns:repeat(3,1fr); gap:5px; }
-    .nav-cell { --tone:var(--muted); position:relative; min-width:0; min-height:74px; padding:6px 7px; border:1px solid color-mix(in srgb,var(--tone) 45%,transparent);
-      background:linear-gradient(180deg,color-mix(in srgb,var(--tone) 12%,transparent),rgba(2,6,14,.7)); }
-    .nav-cell .dir { position:absolute; top:4px; right:6px; color:var(--muted); font-size:13px; }
-    .nav-cell b { display:block; font:800 20px/1 var(--display); color:var(--tone); text-shadow:0 0 12px color-mix(in srgb,var(--tone) 60%,transparent); }
-    .nav-cell em { display:block; font:700 9px var(--display); letter-spacing:.16em; color:var(--tone); font-style:normal; margin-top:2px; }
-    .nav-cell small { display:block; margin-top:3px; color:#a9c4de; font-size:10px; line-height:1.25; overflow:hidden; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; }
-    .nav-cell.chosen { border:2px solid var(--cyan); box-shadow:0 0 0 1px rgba(62,242,255,.4),0 0 22px rgba(62,242,255,.45) inset,0 0 18px rgba(62,242,255,.35); }
-    .nav-cell .pick { position:absolute; bottom:4px; right:6px; font:800 9px var(--display); letter-spacing:.12em; color:#021018; background:var(--cyan); padding:1px 5px; }
-    .t1 { --tone:var(--t1); } .t2 { --tone:var(--t2); } .t3 { --tone:var(--t3); } .t4 { --tone:var(--t4); } .t5 { --tone:var(--t5); } .t6 { --tone:var(--t6); }
-    /* Ordnance and link */
-    .ord { display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-bottom:10px; }
-    .ord-cell { padding:7px 8px; border:1px solid var(--line); background:rgba(2,6,14,.6); font-size:10px; color:#a9c4de; min-height:58px; }
-    .ord-cell b { display:block; font:800 11px var(--display); letter-spacing:.14em; color:var(--muted); margin-bottom:3px; }
-    .ord-cell.rank1 b { color:var(--green); } .ord-cell.chosen { border-color:var(--amber); box-shadow:0 0 16px rgba(255,204,77,.3) inset; }
-    .ord-cell.chosen b::after { content:" ◂ DJEV"; color:var(--amber); }
-    .statusline { display:grid; grid-template-columns:86px 1fr; gap:8px; padding:4px 0; border-bottom:1px dashed rgba(31,91,134,.4); font-size:11px; }
-    .statusline:last-of-type { border-bottom:0; }
-    .statusline span:first-child { color:var(--muted); text-transform:uppercase; letter-spacing:.08em; font-size:10px; }
-    .statusline strong { min-width:0; overflow-wrap:anywhere; font-weight:400; color:#eafcff; }
-    .metrics { display:grid; grid-template-columns:repeat(2,1fr); gap:6px; }
-    .metric { background:rgba(2,6,14,.6); border:1px solid var(--line); padding:7px 8px; }
-    .metric b { display:block; font:800 16px var(--display); color:var(--cyan); letter-spacing:.03em; }
-    .metric span { color:var(--muted); font-size:9px; line-height:1.25; display:block; text-transform:uppercase; letter-spacing:.06em; }
-    .tuning-grid { display:grid; gap:9px; }
-    .slider-row { display:grid; grid-template-columns:104px minmax(90px,1fr) 52px; gap:9px; align-items:center; color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.06em; }
-    .slider-row b { color:var(--amber); text-align:right; font:800 12px var(--display); }
-    input[type="range"] { width:100%; accent-color:var(--magenta); }
-    .history { display:grid; gap:4px; max-height:230px; overflow:auto; }
-    .history-item { display:grid; grid-template-columns:64px 1fr auto; gap:7px; color:var(--muted); font-size:11px; border-left:2px solid var(--line); padding-left:6px; }
-    .history-item b { text-transform:uppercase; letter-spacing:.08em; font-weight:400; }
-    .ok { color:var(--green)!important; border-color:var(--green)!important; } .warn { color:var(--amber)!important; border-color:var(--amber)!important; } .bad { color:var(--red)!important; border-color:var(--red)!important; }
-    .note { color:var(--muted); font-size:10px; margin-top:8px; line-height:1.4; }
-    .http-warning { display:none; width:100%; color:var(--amber); font-size:11px; border:1px solid rgba(255,204,77,.45); padding:8px 10px; background:rgba(255,204,77,.08); }
+    html { background:var(--k); }
+    body { margin:0; min-height:100vh; color:var(--text); font:18px/1.1 var(--crt); overflow-x:hidden;
+      background:
+        radial-gradient(circle at 50% 30%, rgba(31,42,122,.35), transparent 70%),
+        linear-gradient(90deg, rgba(59,63,99,.18) 1px, transparent 1px) 0 0/8px 8px,
+        linear-gradient(0deg, rgba(59,63,99,.18) 1px, transparent 1px) 0 0/8px 8px,
+        var(--k);
+      display:flex; flex-direction:column; align-items:center; justify-content:center; }
+    /* Desktop: the UI is a fixed design frame that #retro-layout zooms uniformly to fit the viewport.
+       square = 1200 x 1200 (58 marquee + 6 + 775 arena + 361 console), wide = 1766 x 839 (console beside the arena).
+       The layout with the larger scale wins, so the arena is always as big as the viewport allows. */
+    @media (min-width:761px) { html, body { height:100%; overflow:hidden; } }
+    .shell { width:1200px; height:1200px; flex:none; display:grid; grid-template-columns:1200px; grid-template-rows:58px 781px 361px;
+      grid-template-areas:"head" "arena" "console"; }
+    header { grid-area:head; } #game-panel { grid-area:arena; } .console { grid-area:console; }
+    body[data-layout="wide"] .shell { width:1766px; height:839px; grid-template-columns:1200px 560px; column-gap:6px;
+      grid-template-rows:58px 781px; grid-template-areas:"head head" "arena console"; }
+    button, input { font:inherit; }
+
+    /* Marquee */
+    header { height:58px; display:grid; grid-template-columns:auto minmax(0,1fr) auto; align-items:center; gap:16px; padding:0 14px;
+      background:linear-gradient(180deg,var(--plate),var(--hull)); border-bottom:2px solid var(--k);
+      box-shadow:var(--bevel), 0 2px 0 var(--d); position:relative; }
+    header::after { content:""; position:absolute; left:0; right:0; bottom:-6px; height:4px; pointer-events:none;
+      background:repeating-linear-gradient(90deg,var(--r) 0 24px,var(--o) 24px 48px,var(--y) 48px 72px,var(--l) 72px 96px,var(--c) 96px 120px,var(--p) 120px 144px,var(--m) 144px 168px); opacity:.85; }
+    .eyebrow { color:var(--c); font:8px/1 var(--pixel); letter-spacing:.08em; text-transform:uppercase; margin-bottom:6px; }
+    h1 { margin:0; font:16px/1 var(--pixel); color:var(--y); text-transform:uppercase; letter-spacing:.02em; white-space:nowrap;
+      text-shadow:2px 2px 0 var(--r), 4px 4px 0 var(--k); }
+    h1 span { color:var(--c); text-shadow:2px 2px 0 var(--b), 4px 4px 0 var(--k); }
+    .sub { margin:0; color:var(--g); font:16px/.95 var(--crt); max-height:46px; overflow:hidden; }
+    .link { display:grid; grid-template-columns:auto auto; gap:2px 10px; align-items:center; white-space:nowrap; font:16px/1 var(--crt); color:var(--g);
+      padding:4px 8px; background:var(--k); box-shadow:inset 0 0 0 2px var(--d); min-width:190px; }
+    .link > span:first-child { font:8px var(--pixel); color:var(--s); }
+    .led { width:8px; height:8px; background:var(--d); display:inline-block; margin-right:6px; vertical-align:-1px; box-shadow:0 0 0 1px var(--k); }
+    .led.on { background:var(--l); box-shadow:0 0 6px var(--l); } .led.busy { background:var(--y); box-shadow:0 0 6px var(--y); } .led.off { background:var(--r); box-shadow:0 0 6px var(--r); }
+    .link b { font:12px var(--pixel); color:var(--c); text-align:right; font-weight:400; }
+    #link-rate { text-align:right; }
+    .spark { display:flex; align-items:flex-end; gap:1px; height:10px; grid-column:1 / -1; }
+    .spark i { flex:1; min-width:2px; background:var(--c); }
+    .spark i:nth-child(3n) { background:var(--t); }
+
+    /* Arena: a CRT tube. The canvas backing store is 1200 x 775; the game still simulates 960 x 620. */
+    #game-panel { position:relative; margin-top:6px; background:var(--k); }
+    .arena { position:relative; overflow:hidden; background:var(--k); }
+    canvas { width:100%; height:auto; display:block; aspect-ratio:48/31; background:var(--n); image-rendering:pixelated; image-rendering:crisp-edges; }
+    .arena::before { content:""; position:absolute; inset:0; pointer-events:none; z-index:2;
+      background:repeating-linear-gradient(0deg, rgba(0,0,0,.22) 0 1px, transparent 1px 3px); mix-blend-mode:multiply; }
+    .arena::after { content:""; position:absolute; inset:0; pointer-events:none; z-index:3;
+      background:radial-gradient(ellipse at 50% 50%, transparent 62%, rgba(0,0,0,.28) 85%, rgba(0,0,0,.6) 100%);
+      box-shadow:inset 0 0 0 2px var(--k), inset 0 0 0 4px var(--d), inset 0 0 24px rgba(0,216,255,.10); }
+
+    /* Cockpit console */
+    .console { min-height:0; display:grid; grid-template-columns:300px 280px minmax(0,1fr) minmax(0,1fr); grid-template-areas:"hud nav link tele"; gap:6px; padding:6px 0 0; }
+    .pod-hud { grid-area:hud; } .pod-nav { grid-area:nav; } .pod-link { grid-area:link; } .pod-tele { grid-area:tele; }
+    body[data-layout="wide"] .console { grid-template-columns:minmax(0,1fr) minmax(0,1fr); grid-template-rows:auto minmax(0,1fr); grid-template-areas:"hud link" "nav tele"; }
+    .pod { position:relative; min-width:0; min-height:0; display:flex; flex-direction:column; gap:6px; padding:6px;
+      background:linear-gradient(180deg,var(--plate),var(--hull)); box-shadow:var(--bevel), 0 0 0 2px var(--k); }
+    .pod::before, .pod::after { content:""; position:absolute; width:4px; height:4px; background:var(--d); top:3px; left:3px;
+      pointer-events:none; }
+    .pod::after { left:auto; right:3px; }
+    .section { min-width:0; min-height:0; display:flex; flex-direction:column; flex:0 0 auto; }
+    .section.grow { flex:1 1 0; overflow:hidden; }
+    .section h2 { display:flex; align-items:center; gap:6px; margin:0 0 5px; padding:3px 6px; font:8px/1 var(--pixel); letter-spacing:.06em;
+      text-transform:uppercase; color:var(--k); background:var(--c); font-weight:400; white-space:nowrap; }
+    .section h2::before { content:""; width:6px; height:6px; background:var(--k); }
+    .section h2 small { margin-left:auto; color:var(--k); font:15px/1 var(--crt); letter-spacing:0; text-transform:none; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; }
+    .pod-nav .section h2 { background:var(--l); } .pod-link .section h2 { background:var(--y); }
+    .pod-tele .section h2 { background:var(--o); } .section.threat h2 { background:var(--m); } .section.log h2 { background:var(--s); }
+    .screen-box { position:relative; background:var(--k); box-shadow:inset 0 0 0 2px var(--d); padding:5px 6px; min-height:0; }
+    .screen-box::after { content:""; position:absolute; inset:0; pointer-events:none;
+      background:repeating-linear-gradient(0deg, rgba(0,0,0,.35) 0 1px, transparent 1px 3px); }
+
+    /* Flight status HUD */
+    .hud { display:grid; grid-template-columns:1fr 1fr; gap:3px; }
+    .hud > div { background:var(--k); box-shadow:inset 0 0 0 1px var(--d); padding:3px 6px 4px; min-width:0; }
+    .hud > div.wide { grid-column:1 / -1; }
+    .label { display:block; color:var(--g); font:14px/1 var(--crt); text-transform:uppercase; }
+    .value { display:block; min-width:0; margin-top:3px; font:10px/1 var(--pixel); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:var(--w); }
+    #hud-score { color:var(--y); } #hud-wave { color:var(--c); } #hud-elapsed { color:var(--l); } #hud-mode { color:var(--m); }
+    #hud-lives { color:var(--r); font:17px/.7 var(--crt); letter-spacing:.1em; padding-bottom:1px; }
+    #hud-bombs { color:var(--o); font:17px/.7 var(--crt); letter-spacing:.1em; padding-bottom:1px; }
+    #hud-weapon, #hud-missiles, #hud-pickups, #hud-run { font:17px/.7 var(--crt); color:var(--s); padding-bottom:1px; }
+    .controls { display:flex; flex-wrap:wrap; align-items:center; gap:5px; }
+    button { font:8px/1 var(--pixel); letter-spacing:.02em; text-transform:uppercase; color:var(--k); background:var(--c);
+      border:0; padding:8px 5px; min-height:28px; cursor:pointer; box-shadow:inset -2px -2px 0 rgba(0,0,0,.4), inset 2px 2px 0 rgba(255,255,255,.45), 0 0 0 2px var(--k); }
+    button:hover { background:var(--w); }
+    button:active { box-shadow:inset 2px 2px 0 rgba(0,0,0,.4), 0 0 0 2px var(--k); }
+    button:focus-visible { outline:2px solid var(--y); outline-offset:2px; }
+    #autopilot-button { background:var(--l); } #pause-button { background:var(--y); } #restart-button { background:var(--r); color:var(--w); }
+    .controls .sub { font-size:15px; line-height:.9; max-height:none; }
+
+    /* Nav computer: 3x3 targeting grid over radar rings */
+    .radar { position:relative; flex:1 1 auto; background:
+        radial-gradient(circle at 50% 50%, transparent 0 22%, rgba(61,255,110,.22) 22% 23%, transparent 23% 45%, rgba(61,255,110,.22) 45% 46%, transparent 46% 68%, rgba(61,255,110,.16) 68% 69%, transparent 69%),
+        linear-gradient(90deg, transparent calc(50% - 1px), rgba(61,255,110,.25) calc(50% - 1px) calc(50% + 1px), transparent calc(50% + 1px)),
+        linear-gradient(0deg, transparent calc(50% - 1px), rgba(61,255,110,.25) calc(50% - 1px) calc(50% + 1px), transparent calc(50% + 1px)),
+        var(--k); }
+    .nav { position:relative; z-index:1; height:100%; display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); grid-template-rows:repeat(3,minmax(0,1fr)); gap:3px; }
+    .nav-cell { --tone:var(--t0); position:relative; min-width:0; min-height:0; overflow:hidden; padding:3px 4px; border:2px solid var(--tone);
+      background:color-mix(in srgb, var(--tone) 12%, rgba(0,0,0,.55)); }
+    .nav-cell .dir { position:absolute; top:2px; right:4px; color:var(--tone); font:18px/1 var(--crt); }
+    .nav-cell b { display:block; font:10px/1 var(--pixel); color:var(--tone); font-weight:400; margin-top:2px; text-transform:uppercase; }
+    .nav-cell em { display:block; font:15px/1 var(--crt); color:var(--tone); font-style:normal; text-transform:uppercase; margin-top:2px; }
+    .nav-cell small { display:-webkit-box; margin-top:1px; color:var(--s); font:14px/.9 var(--crt); overflow:hidden; -webkit-line-clamp:3; -webkit-box-orient:vertical; }
+    .nav-cell.chosen { border-color:var(--w); box-shadow:0 0 0 2px var(--c), inset 0 0 0 2px var(--c); background:color-mix(in srgb, var(--tone) 28%, rgba(0,0,0,.4)); animation:lock 0.5s steps(2) infinite; }
+    @keyframes lock { 50% { box-shadow:0 0 0 2px var(--k), inset 0 0 0 2px var(--c); } }
+    .nav-cell .pick { position:absolute; bottom:2px; right:2px; font:8px/1 var(--pixel); color:var(--k); background:var(--c); padding:2px 3px; }
+    .t0 { --tone:var(--t0); } .t1 { --tone:var(--t1); } .t2 { --tone:var(--t2); } .t3 { --tone:var(--t3); } .t4 { --tone:var(--t4); } .t5 { --tone:var(--t5); } .t6 { --tone:var(--t6); }
+    .t6 { background:repeating-linear-gradient(45deg, rgba(255,42,77,.22) 0 4px, rgba(0,0,0,.55) 4px 8px); }
+    .note { color:var(--g); font:14px/.9 var(--crt); margin-top:4px; }
+
+    /* Command link console */
+    .ord { display:grid; grid-template-columns:1fr 1fr; gap:4px; margin-bottom:4px; }
+    .ord-cell { padding:3px 5px; background:var(--k); box-shadow:inset 0 0 0 2px var(--d); font:15px/.9 var(--crt); color:var(--s); min-height:44px; overflow:hidden;
+      display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; }
+    .ord-cell b { display:block; font:16px/1 var(--crt); color:var(--g); margin-bottom:1px; font-weight:400; text-transform:uppercase; white-space:nowrap; }
+    .ord-cell.rank1 b { color:var(--l); } .ord-cell.chosen { box-shadow:inset 0 0 0 2px var(--y); }
+    .ord-cell.chosen b::after { content:" \25C2 DJEV"; color:var(--y); }
+    .statusline { display:grid; grid-template-columns:70px minmax(0,1fr); gap:6px; padding:1px 0; font:16px/.95 var(--crt); }
+    .statusline span:first-child { color:var(--y); text-transform:uppercase; }
+    .statusline span:first-child::after { content:">"; color:var(--d); margin-left:3px; }
+    .statusline strong { min-width:0; overflow-wrap:anywhere; font-weight:400; color:var(--l); text-shadow:0 0 4px rgba(61,255,110,.45);
+      display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+    .link-screen { flex:1 1 0; min-height:0; overflow:auto; scrollbar-width:thin; scrollbar-color:var(--d) var(--k); }
+
+    /* Telemetry readouts */
+    .metrics { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:3px; }
+    .metric { background:var(--k); box-shadow:inset 0 0 0 1px var(--d); padding:3px 4px; min-width:0; }
+    .metric b { display:block; font:10px/1.2 var(--pixel); color:var(--o); font-weight:400; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+      text-shadow:0 0 4px rgba(255,140,26,.5); }
+    .metric:nth-child(-n+4) b { color:var(--c); text-shadow:0 0 4px rgba(0,216,255,.5); }
+    .metric span { color:var(--g); font:13px/.85 var(--crt); display:block; text-transform:uppercase; margin-top:1px; min-height:22px; }
+    .tuning-grid { display:grid; gap:0; }
+    .slider-row { display:grid; grid-template-columns:96px minmax(60px,1fr) 46px; gap:6px; align-items:center; color:var(--g); font:16px/1 var(--crt); text-transform:uppercase; }
+    .slider-row b { color:var(--y); text-align:right; font:8px var(--pixel); font-weight:400; }
+    input[type="range"] { -webkit-appearance:none; appearance:none; width:100%; height:17px; background:transparent; cursor:pointer; margin:0; }
+    input[type="range"]::-webkit-slider-runnable-track { height:6px; background:repeating-linear-gradient(90deg,var(--d) 0 4px,var(--k) 4px 6px); box-shadow:0 0 0 2px var(--k); }
+    input[type="range"]::-webkit-slider-thumb { -webkit-appearance:none; width:10px; height:16px; margin-top:-5px; background:var(--m); border:0; box-shadow:inset -2px -2px 0 rgba(0,0,0,.4), 0 0 0 2px var(--k); }
+    input[type="range"]::-moz-range-track { height:6px; background:var(--d); }
+    input[type="range"]::-moz-range-thumb { width:10px; height:16px; border:0; border-radius:0; background:var(--m); }
+    input[type="range"]:focus-visible { outline:2px solid var(--y); }
+
+    /* Event log console */
+    .history { display:flex; flex-direction:column; gap:1px; overflow:auto; flex:1 1 auto; min-height:0; scrollbar-width:thin; scrollbar-color:var(--d) var(--k); }
+    .history-item { display:grid; grid-template-columns:62px minmax(0,1fr) auto; gap:5px; color:var(--g); font:15px/.95 var(--crt); padding:0 3px; border-left:3px solid var(--d); }
+    .history-item span:nth-of-type(1) { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--s); }
+    .history-item b { text-transform:uppercase; font-weight:400; }
+    .history-item[data-seq] { cursor:pointer; }
+    .history-item[data-seq]:hover { background:var(--b); border-left-color:var(--c); color:var(--w); }
+    .history-item[data-seq] span:first-of-type::after { content:" \203A"; color:var(--c); }
+    .history-item.ok b { color:var(--l); } .history-item.warn b { color:var(--y); } .history-item.bad b { color:var(--r); }
+    .log .screen-box { flex:1 1 auto; display:flex; flex-direction:column; min-height:0; }
+    .log .screen-box::before { content:"_"; position:absolute; right:6px; bottom:3px; color:var(--l); animation:blink 1s steps(2) infinite; font:16px var(--crt); }
+    @keyframes blink { 50% { opacity:0; } }
+
+    /* API exchange dialog */
+    .exchange-dialog { width:min(1100px,calc(100vw - 32px)); max-height:calc(100vh - 48px); padding:0; color:var(--s); font:17px/1 var(--crt);
+      background:var(--hull); border:0; box-shadow:0 0 0 2px var(--k), 0 0 0 4px var(--c), 0 0 0 6px var(--k), 8px 8px 0 6px rgba(0,0,0,.6); }
+    .exchange-dialog::backdrop { background:rgba(0,0,0,.7); }
+    .exchange-head { display:flex; justify-content:space-between; align-items:center; gap:12px; padding:8px 12px; background:var(--c); }
+    .exchange-head h3 { margin:0; font:10px var(--pixel); text-transform:uppercase; color:var(--k); font-weight:400; }
+    .exchange-meta { color:var(--g); padding:8px 12px 0; overflow-wrap:anywhere; }
+    .exchange-body { display:grid; grid-template-columns:1fr 1fr; gap:12px; padding:8px 12px 12px; }
+    .exchange-body section { min-width:0; }
+    .exchange-body h4 { margin:0 0 6px; font:8px/1 var(--pixel); text-transform:uppercase; color:var(--y); font-weight:400; display:flex; justify-content:space-between; align-items:center; }
+    .exchange-body pre { margin:0; max-height:calc(100vh - 220px); overflow:auto; background:var(--k); box-shadow:inset 0 0 0 2px var(--d);
+      padding:8px; font:16px/1.05 var(--crt); color:var(--l); white-space:pre-wrap; overflow-wrap:anywhere; }
+    .exchange-dialog button { background:var(--y); color:var(--k); padding:6px 8px; min-height:0; }
+    .exchange-head button { background:var(--k); color:var(--c); }
+    .ok { color:var(--l)!important; } .warn { color:var(--y)!important; } .bad { color:var(--r)!important; }
+    .history-item.ok, .history-item.warn, .history-item.bad { color:var(--g)!important; }
+    .history-item.ok { border-left-color:var(--e); } .history-item.warn { border-left-color:var(--o); } .history-item.bad { border-left-color:var(--r); }
+    .http-warning { display:none; width:100%; color:var(--y); font:15px/.95 var(--crt); padding:3px 5px; background:var(--k); box-shadow:inset 0 0 0 2px var(--o); }
     .http-warning.show { display:block; }
-    @media (max-width:1040px) { .layout { grid-template-columns:1fr; } .hud { grid-template-columns:repeat(4,1fr); } }
-    @media (max-width:600px) { .shell { width:100%; margin:0; } header { flex-wrap:wrap; } .hud { grid-template-columns:repeat(2,1fr); } }
+
+    /* Phones and small tablets: one column, 14 px gutter, 40 px+ tap targets. */
+    @media (max-width:760px) {
+      body { font-size:18px; justify-content:flex-start; }
+      .shell { width:100%; height:auto; display:flex; flex-direction:column; padding:0 14px 16px; zoom:1 !important; }
+      header { height:auto; grid-template-columns:minmax(0,1fr); gap:8px; padding:10px; margin:0 -14px; }
+      h1 { font-size:12px; white-space:normal; line-height:1.4; }
+      .sub { max-height:none; }
+      .link { justify-self:stretch; }
+      #game-panel { margin-top:12px; }
+      .console { display:flex; flex-direction:column; gap:10px; padding-top:10px; }
+      .section.grow { flex:none; overflow:visible; }
+      .link-screen { flex:none; overflow:visible; }
+      .pod { gap:10px; padding:8px; }
+      .hud { grid-template-columns:1fr 1fr; }
+      button { min-height:44px; padding:10px 12px; flex:1 1 auto; }
+      .nav { min-height:300px; }
+      .radar { min-height:0; }
+      .slider-row { grid-template-columns:minmax(0,1fr) 54px; grid-template-rows:auto 40px; gap:0 8px; }
+      .slider-row span { grid-column:1 / -1; }
+      .slider-row input { height:40px; }
+      .slider-row b { grid-row:2; grid-column:2; }
+      input[type="range"] { grid-column:1; }
+      .metrics { grid-template-columns:repeat(2,minmax(0,1fr)); }
+      .history { max-height:260px; }
+      .history-item { min-height:28px; align-items:center; }
+      .history-item[data-seq] { min-height:40px; }
+      .exchange-body { grid-template-columns:1fr; }
+      .exchange-dialog button { min-height:40px; }
+    }
   </style>
 </head>
 <body>
@@ -117,29 +232,34 @@
     <header>
       <div>
         <div class="eyebrow">djev autopilot · path + fire + bomb</div>
-        <h1>Jev Strike // Space Shooter</h1>
-        <div class="sub">Every 500 ms-max command comes from djev: one of nine ranked paths, shoot/cease (gun, missiles, escort jets), and hold/detonate. Missing, invalid, or stale answers mean neutral hold plus cease.</div>
+        <h1>Jev Strike <span>// Space Shooter</span></h1>
       </div>
+      <p class="sub">Every 500 ms-max command comes from djev: one of nine ranked paths, shoot/cease (gun, missiles, escort jets), and hold/detonate. Missing, invalid, or stale answers mean neutral hold plus cease.</p>
       <div class="link" aria-label="Djev link">
         <span><i id="link-led" class="led"></i>DJEV LINK</span><b id="link-latency">— ms</b>
         <span id="link-status">idle</span><span id="link-rate">0.0 dec/s</span>
         <div class="spark" id="latency-spark"></div>
       </div>
     </header>
-    <div class="layout">
-      <section id="game-panel" class="panel">
-        <div class="arena"><canvas id="game" width="960" height="620" aria-label="Space shooter arena"></canvas></div>
-        <div class="hud">
-          <div><span class="label">Hull</span><span class="value" id="hud-lives">♥♥♥</span></div>
-          <div><span class="label">Bombs</span><span class="value" id="hud-bombs">●●●</span></div>
-          <div><span class="label">Score</span><span class="value" id="hud-score">0</span></div>
-          <div><span class="label">Wave</span><span class="value" id="hud-wave">1</span></div>
-          <div><span class="label">Mission time</span><span class="value" id="hud-elapsed">0.0 s</span></div>
-          <div><span class="label">Weapon</span><span class="value" id="hud-weapon">Lv 0</span></div>
-          <div><span class="label">Missiles</span><span class="value" id="hud-missiles">0 · 0 kills</span></div>
-          <div><span class="label">Supply · escort</span><span class="value" id="hud-pickups">0 bomb · 0 weapon</span></div>
-          <div><span class="label">Mode</span><span class="value" id="hud-mode">AUTO</span></div>
-          <div><span class="label">Run</span><span class="value" id="hud-run">starting</span></div>
+    <section id="game-panel">
+      <div class="arena"><canvas id="game" width="1200" height="775" aria-label="Space shooter arena"></canvas></div>
+    </section>
+    <section class="console" aria-label="Cockpit console">
+      <div class="pod pod-hud">
+        <div class="section">
+          <h2>Flight status</h2>
+          <div class="hud">
+            <div><span class="label">Hull</span><span class="value" id="hud-lives">♥♥♥</span></div>
+            <div><span class="label">Bombs</span><span class="value" id="hud-bombs">●●●</span></div>
+            <div><span class="label">Score</span><span class="value" id="hud-score">0</span></div>
+            <div><span class="label">Wave</span><span class="value" id="hud-wave">1</span></div>
+            <div><span class="label">Mission time</span><span class="value" id="hud-elapsed">0.0 s</span></div>
+            <div><span class="label">Mode</span><span class="value" id="hud-mode">AUTO</span></div>
+            <div><span class="label">Missiles</span><span class="value" id="hud-missiles">0 · 0 kills</span></div>
+            <div><span class="label">Run</span><span class="value" id="hud-run">starting</span></div>
+            <div class="wide"><span class="label">Weapon</span><span class="value" id="hud-weapon">Lv 0</span></div>
+            <div class="wide"><span class="label">Supply · escort</span><span class="value" id="hud-pickups">0 bomb · 0 weapon</span></div>
+          </div>
         </div>
         <div class="controls">
           <button id="autopilot-button">Auto pilot: ON</button>
@@ -148,15 +268,19 @@
           <span id="http-warning" class="http-warning">This page is open as a local file, so djev and trace HTTP endpoints are unreachable. Serve it from the bridge URL for model-controlled evidence; local file play remains neutral hold plus cease.</span>
           <span class="sub">Manual input, pause, reset, difficulty changes, or lag invalidate benchmark qualification for the active run.</span>
         </div>
-        <div class="deck">
-          <div class="section">
-            <h2>Nav computer <small id="nav-caption">what djev saw · tier 1 best, 6 worst</small></h2>
-            <div id="candidate-grid" class="nav"></div>
-            <div class="note">Each cell is the ranked label djev chose from for that direction; the glowing cell is its pick. Hover a cell for the local forecast behind it.</div>
-          </div>
-          <div class="section">
-            <h2>Command link</h2>
-            <div id="ordnance" class="ord"></div>
+      </div>
+      <div class="pod pod-nav">
+        <div class="section grow">
+          <h2>Nav computer <small id="nav-caption">what djev saw · tier 1 best, 6 worst</small></h2>
+          <div class="radar screen-box"><div id="candidate-grid" class="nav"></div></div>
+          <div class="note">Each cell is the ranked label djev chose from for that direction; the glowing cell is its pick. Hover a cell for the local forecast behind it.</div>
+        </div>
+      </div>
+      <div class="pod pod-link">
+        <div class="section grow">
+          <h2>Command link</h2>
+          <div id="ordnance" class="ord"></div>
+          <div class="screen-box link-screen">
             <div class="statusline"><span>djev</span><strong id="selected">none</strong></div>
             <div class="statusline"><span>Executing</span><strong id="executed">neutral · hold · cease</strong></div>
             <div class="statusline"><span>Pending</span><strong id="request-status">idle</strong></div>
@@ -165,36 +289,45 @@
             <div class="statusline"><span>Integrity</span><strong id="qualification">pending trace</strong></div>
           </div>
         </div>
-      </section>
-      <aside class="side">
-        <section id="decision-panel" class="panel">
-          <div class="section">
-            <h2>Threat level</h2>
-            <div class="tuning-grid">
-              <label class="slider-row"><span>Bullet density</span><input id="bullet-density" type="range" min="1" max="8" step="0.25" value="1" /><b id="bullet-density-value">1.00x</b></label>
-              <label class="slider-row"><span>Enemy density</span><input id="enemy-density" type="range" min="1" max="6" step="0.25" value="1" /><b id="enemy-density-value">1.00x</b></label>
-              <label class="slider-row"><span>Fast bullets</span><input id="fast-bullet-ratio" type="range" min="0" max="1" step="0.05" value="0" /><b id="fast-bullet-ratio-value">0%</b></label>
-              <label class="slider-row"><span>Fast speed</span><input id="fast-bullet-speed" type="range" min="1.1" max="4.8" step="0.1" value="1.6" /><b id="fast-bullet-speed-value">1.60x</b></label>
-            </div>
+        <div class="section threat" id="decision-panel">
+          <h2>Threat level</h2>
+          <div class="tuning-grid">
+            <label class="slider-row"><span>Bullet density</span><input id="bullet-density" type="range" min="1" max="8" step="0.25" value="1" /><b id="bullet-density-value">1.00x</b></label>
+            <label class="slider-row"><span>Enemy density</span><input id="enemy-density" type="range" min="1" max="6" step="0.25" value="1" /><b id="enemy-density-value">1.00x</b></label>
+            <label class="slider-row"><span>Fast bullets</span><input id="fast-bullet-ratio" type="range" min="0" max="1" step="0.05" value="0" /><b id="fast-bullet-ratio-value">0%</b></label>
+            <label class="slider-row"><span>Fast speed</span><input id="fast-bullet-speed" type="range" min="1.1" max="4.8" step="0.1" value="1.6" /><b id="fast-bullet-speed-value">1.60x</b></label>
           </div>
-          <div class="section">
-            <h2>Link telemetry</h2>
-            <div class="metrics">
-              <div class="metric"><b id="metric-latency">260.0</b><span>median round trip ms</span></div>
-              <div class="metric"><b id="metric-token-rate">—</b><span>token throughput tok/s</span></div>
-              <div class="metric"><b id="metric-completed-rate">0.00</b><span>decisions / s</span></div>
-              <div class="metric"><b id="metric-usage">— / —</b><span>input / output tokens</span></div>
-              <div class="metric"><b id="metric-calls">0</b><span>completed calls</span></div>
-              <div class="metric"><b id="metric-failures">0</b><span>api / transport failures</span></div>
-              <div class="metric"><b id="metric-accepted">0</b><span>valid djev commands</span></div>
-              <div class="metric"><b id="metric-applied">0</b><span>applied djev commands</span></div>
-            </div>
+        </div>
+      </div>
+      <div class="pod pod-tele">
+        <div class="section">
+          <h2>Link telemetry</h2>
+          <div class="metrics">
+            <div class="metric"><b id="metric-latency">260.0</b><span>median round trip ms</span></div>
+            <div class="metric"><b id="metric-token-rate">—</b><span>token throughput tok/s</span></div>
+            <div class="metric"><b id="metric-completed-rate">0.00</b><span>decisions / s</span></div>
+            <div class="metric"><b id="metric-usage">— / —</b><span>input / output tokens</span></div>
+            <div class="metric"><b id="metric-calls">0</b><span>completed calls</span></div>
+            <div class="metric"><b id="metric-failures">0</b><span>api / transport failures</span></div>
+            <div class="metric"><b id="metric-accepted">0</b><span>valid djev commands</span></div>
+            <div class="metric"><b id="metric-applied">0</b><span>applied djev commands</span></div>
           </div>
-          <div class="section"><h2>Event log</h2><div id="history" class="history"></div></div>
-        </section>
-      </aside>
-    </div>
+        </div>
+        <div class="section grow log">
+          <h2>Event log <small>click a djev/rejected row for the API exchange</small></h2>
+          <div class="screen-box"><div id="history" class="history"></div></div>
+        </div>
+      </div>
+    </section>
   </main>
+    <dialog id="exchange-dialog" class="exchange-dialog" aria-labelledby="exchange-title">
+      <div class="exchange-head"><h3 id="exchange-title">API exchange</h3><button type="button" id="exchange-close">Close</button></div>
+      <div id="exchange-meta" class="exchange-meta"></div>
+      <div class="exchange-body">
+        <section><h4><span>Request · POST</span><button type="button" data-copy="exchange-request">Copy</button></h4><pre id="exchange-request"></pre></section>
+        <section><h4><span>Response</span><button type="button" data-copy="exchange-response">Copy</button></h4><pre id="exchange-response"></pre></section>
+      </div>
+    </dialog>
 
   <script id="space-decision-core">
   (() => {
@@ -2068,8 +2201,10 @@
     const $ = (id) => document.getElementById(id);
     const canvas = $("game");
     const ctx = canvas.getContext("2d");
-    const W = canvas.width;
-    const H = canvas.height;
+    // Logical arena size (simulation space). The canvas backing store is larger (1200x775) and
+    // receives a nearest-neighbour blit of the low-resolution retro buffer; see draw().
+    const W = 960;
+    const H = 620;
     const FIXED_DT_MS = core.DT_MS;
     const MAX_LAG_MS = 250;
     const MAX_CATCHUP_STEPS = 12;
@@ -2085,7 +2220,7 @@
       };
     })();
     const random = (min, max) => min + visualRandom() * (max - min);
-    const stars = Array.from({ length:100 }, () => ({ x:random(0, W), y:random(0, H), speed:random(12, 70), size:random(.5, 2), alpha:random(.2, .8) }));
+    const stars = Array.from({ length:160 }, () => ({ x:random(0, W), y:random(0, H), speed:random(12, 70), size:random(.5, 2), alpha:random(.2, .8) }));
 
     let game = null;
     let controller = null;
@@ -2122,10 +2257,42 @@
       return run === runState && run.token === runToken && run.controller === controller;
     }
 
-    function addHistory(kind, text, tone = "") {
-      history.unshift({ kind, text, tone, at:(game ? game.sim_ms : 0) / 1000 });
-      history = history.slice(0, 8);
-      $("history").innerHTML = history.map((item) => `<div class="history-item ${item.tone}"><b>${item.kind}</b><span>${item.text}</span><span>${item.at.toFixed(1)}s</span></div>`).join("");
+    function addHistory(kind, text, tone = "", sequence = null) {
+      const runId = runState && runState.id;
+      history.unshift({ kind, text, tone, at:(game ? game.sim_ms : 0) / 1000, sequence:Number.isInteger(sequence) && runId ? sequence : null, runId });
+      history = history.slice(0, 40);
+      $("history").innerHTML = history.map((item) => {
+        const link = item.sequence === null ? "" : ` data-seq="${item.sequence}" data-run="${escapeHtml(item.runId)}" title="Show the API request and response"`;
+        return `<div class="history-item ${item.tone}"${link}><b>${item.kind}</b><span>${escapeHtml(item.text)}</span><span>${item.at.toFixed(1)}s</span></div>`;
+      }).join("");
+    }
+
+    function prettyJson(value) {
+      if (value === null || value === undefined) return "(none)";
+      if (typeof value === "string") {
+        try { return JSON.stringify(JSON.parse(value), null, 2); } catch { return value; }
+      }
+      return JSON.stringify(value, null, 2);
+    }
+
+    async function showExchange(runId, sequence) {
+      const dialog = $("exchange-dialog");
+      $("exchange-title").textContent = `API exchange · S${sequence}`;
+      $("exchange-meta").textContent = "loading…";
+      $("exchange-request").textContent = "";
+      $("exchange-response").textContent = "";
+      if (!dialog.open) dialog.showModal();
+      try {
+        const reply = await fetch(`/api/exchange?run_id=${encodeURIComponent(runId)}&sequence=${sequence}`, { cache:"no-store" });
+        const data = await reply.json();
+        if (!reply.ok) throw new Error(data.error || `HTTP ${reply.status}`);
+        const x = data.exchange;
+        $("exchange-meta").textContent = `POST ${x.endpoint} · status ${x.pending ? "pending" : x.status ?? "—"} · ${x.pending ? "—" : x.latency_ms} ms · ${x.recorded_at_utc} · ${x.decision_id}` + (x.error ? ` · error: ${typeof x.error === "string" ? x.error : JSON.stringify(x.error)}` : "");
+        $("exchange-request").textContent = prettyJson(x.request_body);
+        $("exchange-response").textContent = x.pending ? "(pending: the upstream call has not returned yet; reopen this row)" : prettyJson(x.response_body ?? x.error);
+      } catch (error) {
+        $("exchange-meta").textContent = `Could not load this exchange: ${error.message}`;
+      }
     }
 
     function invalidateQualification(reason, run = runState) {
@@ -2354,9 +2521,9 @@
           recentHits = recentHits.filter((hit) => game.sim_ms - hit.sim_ms <= 5000);
           addHistory("hit", `${event.source.kind} · lives ${event.after_lives}`, "bad");
         } else if (event.type === "response_rejected") {
-          addHistory("rejected", `${event.reason} · S${event.sequence ?? "n/a"}`, "warn");
+          addHistory("rejected", `${event.reason} · S${event.sequence ?? "n/a"}`, "warn", event.sequence);
         } else if (event.type === "response_received") {
-          addHistory("djev", `${event.movement} · ${event.fire} · ${event.lease} · ${modelIntentText(event)}`, "ok");
+          addHistory("djev", `${event.movement} · ${event.fire} · ${event.lease} · ${modelIntentText(event)} · S${event.sequence ?? "n/a"}`, "ok", event.sequence);
         } else if (event.type === "terminal") {
           addHistory("terminal", event.reason, "bad");
         }
@@ -2680,124 +2847,363 @@
       $("ordnance").innerHTML = cells.join("") + fire;
     }
 
-    function draw() {
-      const g = ctx.createLinearGradient(0, 0, 0, H);
-      g.addColorStop(0, "#07152c");
-      g.addColorStop(1, "#020711");
-      ctx.fillStyle = g;
-      ctx.fillRect(0, 0, W, H);
-      stars.forEach((star) => { ctx.globalAlpha = star.alpha; ctx.fillStyle = "#c6dcff"; ctx.fillRect(star.x, star.y, star.size, star.size); });
-      ctx.globalAlpha = 1;
-      ctx.strokeStyle = "rgba(100,155,228,.08)";
-      for (let x = 0; x < W; x += 80) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); }
-      for (let y = 0; y < H; y += 80) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
-      const shotColors = ["#e8f1ff", "#8ff7c0", "#ffd36b", "#ff8bd1"];
-      game.playerBullets.forEach((shot) => { ctx.fillStyle = shotColors[shot.level || 0]; ctx.beginPath(); ctx.arc(shot.x, shot.y, shot.radius, 0, Math.PI * 2); ctx.fill(); });
-      const nowMs = performance.now();
-      game.pickups.forEach((pickup) => {
-        // Fade over the last seconds of life instead of vanishing.
-        const life = core.PICKUP.lifetime_s - pickup.age_s;
-        ctx.save();
-        ctx.globalAlpha = Math.max(0, Math.min(1, life / core.PICKUP.fade_s));
-        ctx.translate(pickup.x, pickup.y);
-        if (pickup.kind === "wingman") {
-          ctx.fillStyle = "#7dffb2";
-          ctx.shadowColor = "#7dffb2"; ctx.shadowBlur = 14;
-          ctx.beginPath(); ctx.moveTo(0, -13); ctx.lineTo(12, 9); ctx.lineTo(-12, 9); ctx.closePath(); ctx.fill();
-        } else if (pickup.kind === "bomb") {
-          const pulse = 1 + Math.sin(nowMs / 160) * .08;
-          ctx.fillStyle = "#ff9447";
-          ctx.shadowColor = "#ffb454"; ctx.shadowBlur = 14;
-          ctx.beginPath(); ctx.arc(0, 0, 11 * pulse, 0, Math.PI * 2); ctx.fill();
-        } else {
-          ctx.rotate(nowMs / 500);
-          ctx.fillStyle = `hsl(${(pickup.hue + nowMs / 20) % 360},90%,62%)`;
-          ctx.shadowColor = ctx.fillStyle; ctx.shadowBlur = 14;
-          ctx.fillRect(-11, -11, 22, 22);
-          ctx.rotate(-nowMs / 500);
-        }
-        ctx.shadowBlur = 0;
-        ctx.fillStyle = "#08111f";
-        ctx.font = "800 12px Inter,sans-serif";
-        ctx.textAlign = "center"; ctx.textBaseline = "middle";
-        ctx.fillText(pickup.kind === "bomb" ? "B" : pickup.kind === "wingman" ? "F" : "W", 0, pickup.kind === "wingman" ? 3 : 1);
-        ctx.restore();
-      });
-      ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
-      game.enemyBullets.forEach((shot) => { ctx.fillStyle = shot.fast ? "#ffffff" : shot.sweep ? "#ffc86b" : "#ff7086"; ctx.beginPath(); ctx.arc(shot.x, shot.y, shot.radius, 0, Math.PI * 2); ctx.fill(); if (shot.fast) { ctx.strokeStyle = "#5ce1e6"; ctx.stroke(); } });
-      game.playerMissiles.forEach((missile) => {
-        ctx.save();
-        ctx.translate(missile.x, missile.y);
-        ctx.rotate(missile.heading + Math.PI / 2);
-        ctx.fillStyle = ["#ffb454", "#7ee8ff", "#ff7ad9"][missile.slot || 0];
-        ctx.beginPath(); ctx.moveTo(0, -7); ctx.lineTo(3.5, 5); ctx.lineTo(-3.5, 5); ctx.closePath(); ctx.fill();
-        ctx.fillStyle = "rgba(255,120,60,.7)"; ctx.fillRect(-1.5, 5, 3, 5);
-        ctx.restore();
-      });
-      if (bombFlash && performance.now() < bombFlash.until) {
-        const left = (bombFlash.until - performance.now()) / 450;
-        ctx.strokeStyle = `rgba(255,220,120,${left.toFixed(2)})`;
-        ctx.lineWidth = 3;
-        ctx.beginPath(); ctx.arc(bombFlash.x, bombFlash.y, bombFlash.radius * (1.15 - left * .15), 0, Math.PI * 2); ctx.stroke();
-        ctx.fillStyle = `rgba(255,220,120,${(left * .18).toFixed(3)})`; ctx.fill();
-        ctx.lineWidth = 1;
+    // ---- Retro renderer (visual only: nothing below feeds back into the simulation) ----
+    // The world is drawn into a 480x310 buffer (one retro pixel = 2 logical px) and blitted
+    // to the 1200x775 canvas with nearest-neighbour scaling so everything reads as chunky pixels.
+    const PIXEL = 2;
+    const LO_W = W / PIXEL;
+    const LO_H = H / PIXEL;
+    const PALETTE = {
+      K:"#000000", N:"#0b0d2e", B:"#1f2a7a", C:"#00d8ff", T:"#0a8ea0", W:"#ffffff", G:"#9aa3c7", D:"#3b3f63",
+      R:"#ff2a4d", O:"#ff8c1a", Y:"#ffe23d", L:"#3dff6e", E:"#0f9c3a", M:"#ff3fd2", P:"#8a3dff", S:"#ffc9a0",
+    };
+    // Sprites are palette-keyed bitmaps. `half` rows are mirrored to make symmetric art
+    // (odd:true shares the centre column); "#" is a per-draw tint colour; "." is transparent.
+    const SPRITES = {
+      // Original "Kestrel" starfighter: forked wing tips, cyan canopy, twin engines.
+      player_a:{ odd:true, half:[
+        "......W", ".....GS", ".....GC", "C....CW", "GR..DGC", "GRGGDGG", "GGGGDGS", "GRGGDGG", "GR..DGG", "C...D.G", "....Y..", "....O.." ] },
+      player_b:{ odd:true, half:[
+        "......W", ".....GS", ".....GC", "C....CW", "GR..DGC", "GRGGDGG", "GGGGDGS", "GRGGDGG", "GR..DGG", "C...D.G", "....O..", "......." ] },
+      scout:{ half:[
+        "P.......", "PP......", "PBP..BBB", ".PBBBBGG", "..PBBGCC", "...PBGCW", "...PBGCC", "..PBBBGG", ".PBP.BBB", "PP....RB", "P......R" ] },
+      tank:{ half:[
+        "....DDDDDDDD", "...DGGGGGGGG", "..DGOOOOOOOO", ".DGOOYYOOOOO", "DGOOYOOODDDD", "DGOOOOODGGGG", "DGOOOOODGRRR", "DGOOOOODGRWW",
+        "DGOOOOODGRRR", "DGOOOOODGGGG", ".DGOOOOODDDD", "..DGGOOOOOOO", "...DDGGGGGGG", ".....DD.DDDD", ".....GG...DD", ".....YY....." ] },
+      swarm:{ half:[
+        "M.....", "MM....", ".MM..P", "..MPPP", ".MPMYY", "MPPPMM", "M..PPP", "...M.P", "..M..." ] },
+      boss:{ half:[
+        "..........DDDDDDDDDDDDDD",
+        "........DDPPPPPPPPPPPPPP",
+        "......DDPPMMMMMMMMMMMMMM",
+        "....DDPPMMPPPPPPPPPPPPPP",
+        "..DDPPMMPPBBBBBBBBBBBBBB",
+        ".DPPMMPPBBCCBBCCBBCCBBCC",
+        "DPMMPPBBBBBBBBBBBBBBBBBB",
+        "DPMPPRRPPPPPPPPPPPPPPPPP",
+        "DPMPRYYRPPPPPPDDDDDDDDDD",
+        "DPMPPRRPPPPPPDGGGGGGGGGG",
+        "DPPMPPPPPPPPDGRRRRRRRRRR",
+        ".DPPMMPPPPPDGRROOOOOOOOO",
+        "..DPPPMMPPPDGROOYYYYYYYY",
+        "...DPPPPMPDGRROYYYYYYWWW",
+        "....DDPPPPDGRROYYYYYYWWW",
+        ".....DPPPPDGRROOYYYYYYYY",
+        "......DPPPDGGRROOOOOOOOO",
+        ".......DPPPDGGRRRRRRRRRR",
+        "........DPPPDDGGGGGGGGGG",
+        "........DPPPPPDDDDDDDDDD",
+        ".......DPMMPPPPPPPPPPPPP",
+        "......DPM..DPPPPPPPPPPPP",
+        ".....DPM....DPPPDDDDDPPP",
+        "....DPM......DPD.....DPD",
+        "...DGG.......DGD.....DGD",
+        "...DYY........Y.......Y.",
+        "...............O.......O" ] },
+      weapon:{ odd:true, half:[
+        ".#####", "######", "##KKKK", "##KWKK", "##KWKK", "##KWKW", "##KWKW", "##KKWK", "##KKKK", "######", ".#####" ] },
+      bomb:{ rows:[
+        "....####....", "..#SS#####..", ".#SKKKKKK##.", "###KWWWKK###", "###KWKKWK###", "###KWWWKK###", "###KWKKWK###",
+        "###KWWWKK###", ".##KKKKKK##.", "..########..", "....####...." ] },
+      wingman_pickup:{ rows:[
+        ".....LL.....", "....LLLL....", "....LKKL....", "...LKWWWL...", "...LKWKKL...", "..LLKWWKLL..", "..LKKWKKKL..",
+        ".LLKKWKKKLL.", ".LKKKKKKKKL.", "LLLLLLLLLLLL" ] },
+      wingman:{ odd:true, half:[ "...L", "..LW", "L.LL", "LLEL", "L.EE", "...O" ] },
+      missile:{ rows:[ ".#.", "#W#", "GWG", "GWG", "G.G", ".Y.", ".O." ] },
+      enemy_missile:{ rows:[ "..R..", ".RWR.", ".RRR.", "RDRDR", "R.R.R", "..Y..", "..O.." ] },
+    };
+    const RAINBOW = ["R", "O", "Y", "L", "C", "P", "M"];
+    const spriteCache = new Map();
+    let lo = null;
+    let lctx = null;
+    let nebula = null;
+    let lastEnemyGame = null;
+    const lastEnemySeen = new Map();
+    let blasts = [];
+
+    function spriteRows(def) {
+      if (def.rows) return def.rows;
+      return def.half.map((row) => row + [...row].reverse().join("").slice(def.odd ? 1 : 0));
+    }
+
+    function makeCanvas(width, height) {
+      const surface = document.createElement("canvas");
+      surface.width = width;
+      surface.height = height;
+      const context = surface.getContext("2d");
+      context.imageSmoothingEnabled = false;
+      return [surface, context];
+    }
+
+    function sprite(name, tint = "W") {
+      const key = `${name}:${tint}`;
+      if (spriteCache.has(key)) return spriteCache.get(key);
+      const rows = spriteRows(SPRITES[name]);
+      const [surface, context] = makeCanvas(rows[0].length, rows.length);
+      rows.forEach((row, y) => [...row].forEach((cell, x) => {
+        if (cell === ".") return;
+        context.fillStyle = PALETTE[cell === "#" ? tint : cell];
+        context.fillRect(x, y, 1, 1);
+      }));
+      spriteCache.set(key, surface);
+      return surface;
+    }
+
+    // Rotation is quantised to 16 headings and cached, sampled nearest-neighbour so it stays pixelated.
+    function rotatedSprite(name, angle, tint = "W") {
+      const step = ((Math.round(angle / (Math.PI / 8)) % 16) + 16) % 16;
+      const key = `${name}:${tint}:r${step}`;
+      if (spriteCache.has(key)) return spriteCache.get(key);
+      const base = sprite(name, tint);
+      const size = Math.ceil(Math.hypot(base.width, base.height)) | 1;
+      const [surface, context] = makeCanvas(size, size);
+      context.translate(size / 2, size / 2);
+      context.rotate(step * Math.PI / 8);
+      context.drawImage(base, -base.width / 2, -base.height / 2);
+      spriteCache.set(key, surface);
+      return surface;
+    }
+
+    const lx = (value) => Math.round(value / PIXEL);
+
+    function blit(surface, x, y) {
+      lctx.drawImage(surface, Math.round(x / PIXEL - surface.width / 2), Math.round(y / PIXEL - surface.height / 2));
+    }
+
+    function px(x, y, w, h, color) {
+      lctx.fillStyle = PALETTE[color];
+      lctx.fillRect(x, y, w, h);
+    }
+
+    function pixelText(text, x, y, size, color, align = "left", shadow = "K") {
+      lctx.font = `${size}px "Press Start 2P", monospace`;
+      lctx.textAlign = align;
+      lctx.textBaseline = "top";
+      if (shadow) { lctx.fillStyle = PALETTE[shadow]; lctx.fillText(text, x + 1, y + 1); }
+      lctx.fillStyle = PALETTE[color];
+      lctx.fillText(text, x, y);
+    }
+
+    function pixelRing(cx, cy, radius, color, thickness = 1) {
+      const steps = Math.max(24, Math.ceil(radius * 6.4));
+      lctx.fillStyle = PALETTE[color];
+      for (let i = 0; i < steps; i += 1) {
+        const angle = i / steps * Math.PI * 2;
+        lctx.fillRect(Math.round(cx + Math.cos(angle) * radius), Math.round(cy + Math.sin(angle) * radius), thickness, thickness);
       }
-      game.enemies.forEach((enemy) => {
-        ctx.save();
-        ctx.translate(enemy.x, enemy.y);
-        if (enemy.type === "boss") {
-          ctx.fillStyle = "#ff5c7a";
-          ctx.shadowColor = "#ff5c7a"; ctx.shadowBlur = 18;
-          ctx.beginPath(); ctx.moveTo(-enemy.w / 2, -enemy.h / 4); ctx.lineTo(0, -enemy.h / 2); ctx.lineTo(enemy.w / 2, -enemy.h / 4); ctx.lineTo(enemy.w / 3, enemy.h / 2); ctx.lineTo(-enemy.w / 3, enemy.h / 2); ctx.closePath(); ctx.fill();
-          ctx.shadowBlur = 0;
-          ctx.fillStyle = "rgba(0,0,0,.5)"; ctx.fillRect(-enemy.w / 2, -enemy.h / 2 - 10, enemy.w, 5);
-          ctx.fillStyle = "#ffd36b"; ctx.fillRect(-enemy.w / 2, -enemy.h / 2 - 10, enemy.w * Math.max(0, enemy.hp) / enemy.maxHp, 5);
-        } else {
-          ctx.fillStyle = enemy.type === "tank" ? "#ffc86b" : enemy.type === "swarm" ? "#c47bff" : "#6e8cff";
-          ctx.fillRect(-enemy.w / 2, -enemy.h / 2, enemy.w, enemy.h);
+    }
+
+    // A dithered nebula strip that tiles vertically; pre-rendered once.
+    function buildNebula() {
+      const bayer = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5];
+      const [surface, context] = makeCanvas(LO_W, LO_H);
+      context.fillStyle = PALETTE.N;
+      context.fillRect(0, 0, LO_W, LO_H);
+      const ty = Math.PI * 2 / LO_H;
+      for (let y = 0; y < LO_H; y += 1) {
+        for (let x = 0; x < LO_W; x += 1) {
+          const cloud = .5 + .5 * Math.sin(x * .018 + Math.sin(y * ty * 2) * 2.2) * Math.cos(y * ty + x * .006);
+          const wisp = .5 + .5 * Math.sin(x * .05 - y * ty * 3 + Math.cos(x * .011) * 3);
+          const density = cloud * cloud * .62 + wisp * .1 - .24;
+          const threshold = (bayer[(y % 4) * 4 + (x % 4)] + .5) / 16;
+          if (density > threshold + .3) context.fillStyle = (x + y) % 2 ? PALETTE.B : PALETTE.P;
+          else if (density > threshold) context.fillStyle = PALETTE.B;
+          else continue;
+          if (density <= threshold + .3 && (x + y) % 2) continue;
+          context.fillRect(x, y, 1, 1);
         }
-        ctx.restore();
+      }
+      return surface;
+    }
+
+    function ensureRetroSurfaces() {
+      if (lo) return;
+      [lo, lctx] = makeCanvas(LO_W, LO_H);
+      nebula = buildNebula();
+    }
+
+    // Explosions are a pure visual echo: an enemy that vanishes inside the arena leaves a pixel burst.
+    function trackBlasts(nowMs) {
+      if (lastEnemyGame !== game) { lastEnemyGame = game; lastEnemySeen.clear(); blasts = []; }
+      const present = new Set();
+      game.enemies.forEach((enemy) => {
+        present.add(enemy.id);
+        lastEnemySeen.set(enemy.id, { x:enemy.x, y:enemy.y, type:enemy.type });
       });
+      for (const [id, enemy] of lastEnemySeen) {
+        if (present.has(id)) continue;
+        lastEnemySeen.delete(id);
+        if (enemy.y > 0 && enemy.y < H - 10) blasts.push({ x:enemy.x, y:enemy.y, born:nowMs, big:enemy.type === "boss" ? 2 : enemy.type === "tank" ? 1 : 0 });
+      }
+      blasts = blasts.filter((blast) => nowMs - blast.born < 420 + blast.big * 260);
+    }
+
+    function drawBlast(blast, nowMs) {
+      const duration = 420 + blast.big * 260;
+      const t = (nowMs - blast.born) / duration;
+      const cx = lx(blast.x);
+      const cy = lx(blast.y);
+      const reach = (6 + blast.big * 10) * (.35 + t);
+      const ramp = ["W", "Y", "O", "R", "D"];
+      const color = ramp[Math.min(ramp.length - 1, Math.floor(t * ramp.length))];
+      const count = 10 + blast.big * 8;
+      const size = blast.big ? 3 : 2;
+      for (let i = 0; i < count; i += 1) {
+        const angle = i / count * Math.PI * 2 + (i % 2) * .3;
+        const r = reach * (i % 3 === 0 ? 1 : .7);
+        px(Math.round(cx + Math.cos(angle) * r), Math.round(cy + Math.sin(angle) * r), size, size, color);
+      }
+      if (t < .35) px(cx - 2 - blast.big, cy - 2 - blast.big, 5 + blast.big * 2, 5 + blast.big * 2, t < .15 ? "W" : "Y");
+    }
+
+    function drawEnemyBullet(shot) {
+      const x = lx(shot.x);
+      const y = lx(shot.y);
+      if (shot.fast) {
+        const speed = Math.hypot(shot.vx, shot.vy) || 1;
+        const tx = -shot.vx / speed;
+        const ty = -shot.vy / speed;
+        px(Math.round(x + tx * 4) - 1, Math.round(y + ty * 4) - 1, 2, 2, "T");
+        px(Math.round(x + tx * 7), Math.round(y + ty * 7), 1, 1, "T");
+        px(x - 2, y - 3, 5, 7, "C");
+        px(x - 3, y - 2, 7, 5, "C");
+        px(x - 1, y - 2, 3, 5, "W");
+        px(x - 2, y - 1, 5, 3, "W");
+      } else {
+        const outer = shot.sweep ? "O" : "R";
+        const inner = shot.sweep ? "Y" : "S";
+        px(x - 2, y - 1, 4, 2, outer);
+        px(x - 1, y - 2, 2, 4, outer);
+        px(x - 1, y - 1, 2, 2, inner);
+      }
+    }
+
+    function draw() {
+      ensureRetroSurfaces();
+      const nowMs = performance.now();
+      const blink = Math.floor(nowMs / 250) % 2 === 0;
+      // Background: scrolling dithered nebula plus a three-layer parallax starfield.
+      const drift = Math.floor(nowMs / 90) % LO_H;
+      lctx.drawImage(nebula, 0, drift - LO_H);
+      lctx.drawImage(nebula, 0, drift);
+      stars.forEach((star, index) => {
+        const x = lx(star.x);
+        const y = lx(star.y);
+        if (star.speed < 30) {
+          if ((index + Math.floor(nowMs / 400)) % 7 !== 0) px(x, y, 1, 1, "D");
+        } else if (star.speed < 52) {
+          px(x, y, 1, 1, star.alpha > .5 ? "G" : "T");
+        } else {
+          px(x, y - 2, 1, 2, "T");
+          px(x, y, 1, 1, "W");
+        }
+      });
+      trackBlasts(nowMs);
+
+      // Player gun: chunky bolts coloured by weapon level; escort-jet shots are smaller.
+      const shotColors = ["W", "L", "Y", "M"];
+      game.playerBullets.forEach((shot) => {
+        const x = lx(shot.x);
+        const y = lx(shot.y);
+        const color = shotColors[shot.level || 0];
+        if (shot.wingman !== undefined) { px(x - 1, y - 1, 2, 2, color); return; }
+        px(x - 1, y - 2, 2, 4, color);
+        px(x - 1, y + 2, 2, 1, "T");
+      });
+
+      game.pickups.forEach((pickup) => {
+        // Fade over the last seconds of life instead of vanishing (quantised for a stepped arcade fade).
+        const life = core.PICKUP.lifetime_s - pickup.age_s;
+        const alpha = Math.max(0, Math.min(1, life / core.PICKUP.fade_s));
+        lctx.globalAlpha = Math.ceil(alpha * 4) / 4;
+        const bob = Math.round(Math.sin(nowMs / 220 + pickup.x) * 1) * PIXEL;
+        if (pickup.kind === "wingman") blit(sprite("wingman_pickup"), pickup.x, pickup.y + bob);
+        else if (pickup.kind === "bomb") blit(sprite("bomb", Math.sin(nowMs / 160) > 0 ? "O" : "Y"), pickup.x, pickup.y + bob);
+        else blit(sprite("weapon", RAINBOW[Math.floor(pickup.hue / 360 * RAINBOW.length + nowMs / 110) % RAINBOW.length]), pickup.x, pickup.y + bob);
+        lctx.globalAlpha = 1;
+      });
+
+      game.enemyBullets.forEach(drawEnemyBullet);
+
+      const missileTints = ["O", "C", "M"];
+      game.playerMissiles.forEach((missile) => {
+        blit(rotatedSprite("missile", missile.heading + Math.PI / 2, missileTints[missile.slot || 0]), missile.x, missile.y);
+      });
+
+      if (bombFlash && nowMs < bombFlash.until) {
+        const left = (bombFlash.until - nowMs) / 450;
+        const radius = bombFlash.radius * (1.15 - left * .15) / PIXEL;
+        const cx = lx(bombFlash.x);
+        const cy = lx(bombFlash.y);
+        // Sparse ordered-dither fill that thins out as the flash fades.
+        const gap = left > .66 ? 3 : left > .33 ? 4 : 6;
+        lctx.fillStyle = PALETTE.Y;
+        for (let y = -Math.floor(radius); y <= radius; y += gap) {
+          const span = Math.sqrt(Math.max(0, radius * radius - y * y));
+          for (let x = -Math.floor(span) + ((y / gap) % 2 ? gap / 2 : 0); x <= span; x += gap) lctx.fillRect(Math.round(cx + x), Math.round(cy + y), 1, 1);
+        }
+        pixelRing(cx, cy, radius, left > .5 ? "W" : "Y", 2);
+        pixelRing(cx, cy, radius - 3, "O", 1);
+      }
+
+      game.enemies.forEach((enemy) => {
+        if (enemy.type === "boss") {
+          blit(sprite("boss"), enemy.x, enemy.y);
+          const barX = lx(enemy.x - enemy.w / 2);
+          const barY = lx(enemy.y - enemy.h / 2 - 10);
+          const barW = lx(enemy.w);
+          const ratio = Math.max(0, enemy.hp) / enemy.maxHp;
+          px(barX - 1, barY - 1, barW + 2, 5, "K");
+          px(barX, barY, barW, 3, "D");
+          px(barX, barY, Math.round(barW * ratio), 3, ratio < .3 ? "R" : "Y");
+        } else {
+          blit(sprite(enemy.type === "tank" ? "tank" : enemy.type === "swarm" ? "swarm" : "scout"), enemy.x, enemy.y);
+        }
+      });
+      blasts.forEach((blast) => drawBlast(blast, nowMs));
+
       core.WINGMAN.slot_angles_deg.slice(0, game.wingmen).forEach((deg) => {
         const angle = deg * Math.PI / 180 + game.wingPhase;
-        ctx.save();
-        ctx.translate(Math.max(6, Math.min(W - 6, game.player.x + Math.cos(angle) * core.WINGMAN.radius)), Math.max(6, Math.min(H - 6, game.player.y + Math.sin(angle) * core.WINGMAN.radius)));
-        ctx.rotate(angle + Math.PI / 2);
-        ctx.fillStyle = "#7dffb2";
-        ctx.beginPath(); ctx.moveTo(0, -8); ctx.lineTo(6, 5); ctx.lineTo(0, 3); ctx.lineTo(-6, 5); ctx.closePath(); ctx.fill();
-        ctx.restore();
+        const x = Math.max(6, Math.min(W - 6, game.player.x + Math.cos(angle) * core.WINGMAN.radius));
+        const y = Math.max(6, Math.min(H - 6, game.player.y + Math.sin(angle) * core.WINGMAN.radius));
+        blit(rotatedSprite("wingman", angle + Math.PI / 2), x, y);
       });
+
       game.enemyMissiles.forEach((missile) => {
-        ctx.save();
-        ctx.translate(missile.x, missile.y);
-        ctx.rotate(missile.heading + Math.PI / 2);
-        ctx.fillStyle = "#ff4d6d";
-        ctx.beginPath(); ctx.moveTo(0, -8); ctx.lineTo(5, 6); ctx.lineTo(-5, 6); ctx.closePath(); ctx.fill();
-        ctx.fillStyle = "rgba(255,160,90,.8)"; ctx.fillRect(-2, 6, 4, 6);
-        ctx.restore();
+        blit(rotatedSprite("enemy_missile", missile.heading + Math.PI / 2), missile.x, missile.y);
       });
+
       if (!(game.player.invincible_s > 0 && Math.floor(game.player.invincible_s * 12) % 2 === 0)) {
-        ctx.save();
-        ctx.translate(game.player.x, game.player.y);
-        ctx.fillStyle = "#5ce1e6";
-        ctx.beginPath();
-        ctx.moveTo(0, -13);
-        ctx.lineTo(11, 8);
-        ctx.lineTo(0, 5);
-        ctx.lineTo(-11, 8);
-        ctx.closePath();
-        ctx.fill();
-        ctx.restore();
+        blit(sprite(Math.floor(nowMs / 80) % 2 ? "player_a" : "player_b"), game.player.x, game.player.y);
       }
+
+      // Arcade marquee text inside the tube.
+      pixelText(`SCORE ${String(game.score).padStart(7, "0")}`, 6, 5, 8, "W");
+      pixelText(`WAVE ${String(game.wave).padStart(2, "0")}`, LO_W - 6, 5, 8, "C", "right");
+      for (let i = 0; i < Math.max(0, game.player.lives); i += 1) lctx.drawImage(sprite("player_b"), 6 + i * 15, LO_H - 16);
+      for (let i = 0; i < game.bomb.charges; i += 1) lctx.drawImage(sprite("bomb", "O"), LO_W - 18 - i * 14, LO_H - 15);
+      if (game.boss.active_id && blink && !game.terminal) pixelText("WARNING: BOSS", LO_W / 2, 5, 8, "R", "center");
+
       if (paused || game.terminal) {
-        ctx.fillStyle = "rgba(2,7,17,.68)";
-        ctx.fillRect(0, 0, W, H);
-        ctx.textAlign = "center";
-        ctx.fillStyle = "#e8f1ff";
-        ctx.font = "800 28px Inter,sans-serif";
-        ctx.fillText(game.terminal ? `Run ended: ${game.terminal.reason}` : "Paused", W / 2, H / 2);
-        ctx.textAlign = "left";
+        // Checkerboard dim, then a pixel-font banner.
+        lctx.fillStyle = "rgba(0,0,0,.55)";
+        lctx.fillRect(0, 0, LO_W, LO_H);
+        lctx.fillStyle = PALETTE.K;
+        for (let y = 0; y < LO_H; y += 2) for (let x = y % 4; x < LO_W; x += 4) lctx.fillRect(x, y, 1, 1);
+        px(0, LO_H / 2 - 22, LO_W, 44, "K");
+        px(0, LO_H / 2 - 22, LO_W, 2, game.terminal ? "R" : "C");
+        px(0, LO_H / 2 + 20, LO_W, 2, game.terminal ? "R" : "C");
+        if (game.terminal) {
+          pixelText("RUN ENDED", LO_W / 2, LO_H / 2 - 14, 16, "R", "center", "B");
+          pixelText(String(game.terminal.reason).toUpperCase(), LO_W / 2, LO_H / 2 + 7, 8, "Y", "center");
+        } else {
+          pixelText("PAUSED", LO_W / 2, LO_H / 2 - 14, 16, "C", "center", "B");
+          if (blink) pixelText("PRESS SPACE OR RESUME", LO_W / 2, LO_H / 2 + 7, 8, "Y", "center");
+        }
       }
+
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(lo, 0, 0, LO_W, LO_H, 0, 0, canvas.width, canvas.height);
     }
 
     async function restartRun(reason = "reset") {
@@ -2905,12 +3311,45 @@
       $("autopilot-button").textContent = autopilot ? "Auto pilot: ON" : "Auto pilot: OFF";
     });
     $("pause-button").addEventListener("click", () => setPaused(!paused));
+    $("history").addEventListener("click", (event) => {
+      const row = event.target.closest(".history-item[data-seq]");
+      if (row) showExchange(row.dataset.run, Number(row.dataset.seq));
+    });
+    $("exchange-close").addEventListener("click", () => $("exchange-dialog").close());
+    $("exchange-dialog").addEventListener("click", (event) => {
+      if (event.target === event.currentTarget) event.currentTarget.close();
+      const copy = event.target.closest("button[data-copy]");
+      if (copy && navigator.clipboard) navigator.clipboard.writeText($(copy.dataset.copy).textContent).catch(() => {});
+    });
     $("restart-button").addEventListener("click", () => { invalidateQualification("reset"); restartRun(); });
     ["bullet-density","enemy-density","fast-bullet-ratio","fast-bullet-speed"].forEach((id) => $(id).addEventListener("input", readDifficultyControls));
 
     syncDifficultyControls();
     restartRun();
     requestAnimationFrame(frame);
+  })();
+  </script>
+  <script id="retro-layout">
+  // Presentation only: zoom the fixed desktop frame to fit the viewport (no page scroll).
+  // Picks whichever frame (square 1200x1200 or wide 1766x839) yields the larger scale; phones keep a scrolling column.
+  (() => {
+    const shell = document.querySelector(".shell");
+    const FRAMES = { square:[1200, 1200], wide:[1766, 839] };
+    function fit() {
+      const vw = document.documentElement.clientWidth || innerWidth;
+      const vh = document.documentElement.clientHeight || innerHeight;
+      if (vw <= 760) {
+        document.body.dataset.layout = "mobile";
+        shell.style.zoom = "";
+        return;
+      }
+      const scaleFor = ([fw, fh]) => Math.min(vw / fw, vh / fh);
+      const layout = scaleFor(FRAMES.wide) > scaleFor(FRAMES.square) ? "wide" : "square";
+      document.body.dataset.layout = layout;
+      shell.style.zoom = String(Math.floor(scaleFor(FRAMES[layout]) * 1000) / 1000);
+    }
+    addEventListener("resize", fit);
+    fit();
   })();
   </script>
 </body>

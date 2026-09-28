@@ -1,4 +1,90 @@
-# Jev Space Shooter — local djev decision demo
+# Jev Space Shooter — Julia 1 edition
+
+> **This is the Julia 1 fork** of [`jev-spaceshooter-demo`](https://github.com/jstdlee/jev-spaceshooter-demo), kept separate so the original djev-spark setup stays untouched.
+> It plays against [SupersonicLabs/Julia-1](https://huggingface.co/SupersonicLabs/Julia-1) (a 144M-parameter mmBERT-small decision model) served by a local Go `julia-api` (a port of the Laya API; not included in this repository), and adds a retro pixel UI and an **event-log detail view**.
+
+## Demo videos
+
+![Julia 1 flying all four difficulty levels at once (1/3, 1/2, 3/4, 4/4, left to right and top to bottom)](docs/media/julia1/preview-all-difficulties.gif)
+
+Real-time recordings of the retro pixel UI, 1200×1200, autopilot only (no manual input). Each difficulty level
+sets all four threat sliders to that fraction of their range. Recorded 2026-09-28 against the local Julia 1 API
+(independent mode, two judgements per path option), one run per level with a 60-second cap:
+
+| Level | Bullets · enemies · fast bullets · fast speed | Outcome | Video | Screenshot |
+| --- | --- | --- | --- | --- |
+| 1/3 | 3.25× · 2.75× · 35% · 2.3× | died at 57.6 s, score 1,992 | [MP4, 6.8 MB](docs/media/julia1/difficulty-1-3.mp4) | [PNG](docs/media/julia1/difficulty-1-3.png) |
+| 1/2 | 4.5× · 3.5× · 50% · 3.0× | survived 60 s, score 3,260 | [MP4, 7.7 MB](docs/media/julia1/difficulty-1-2.mp4) | [PNG](docs/media/julia1/difficulty-1-2.png) |
+| 3/4 | 6.25× · 4.75× · 75% · 3.9× | died at 41.8 s, score 1,052 | [MP4, 4.6 MB](docs/media/julia1/difficulty-3-4.mp4) | [PNG](docs/media/julia1/difficulty-3-4.png) |
+| 4/4 | 8× · 6× · 100% · 4.8× | died at 32.1 s, score 1,068 | [MP4, 3.5 MB](docs/media/julia1/difficulty-4-4.mp4) | [PNG](docs/media/julia1/difficulty-4-4.png) |
+
+These are single runs, not benchmarks: the 1/3 run dying while the 1/2 run survived shows how much one run varies.
+For controlled numbers see the lockstep results below.
+
+## Retro UI
+
+The page renders the unchanged 960×620 arena into a 480×310 pixel buffer, scales it up with hard pixels, and uses
+an original pixel-art starfighter, a 16-colour arcade palette, CRT scanlines and a cockpit-style console. On
+desktop the whole UI scales to fit one screen (a square 1200×1200 frame or a wide layout, whichever gives the larger
+canvas); at 760 px and below it becomes a single scrolling column for phones. Only rendering and layout changed:
+the game core, controller and protocol are byte-identical and all tests pass.
+
+![Retro UI at 1200×1200, 1/2 difficulty](docs/media/julia1/difficulty-1-2.png)
+
+## Julia 1 setup
+
+```bash
+# 1. Julia API on :8011, with independent choice scoring (see below).
+#    julia-api is a separate local project and is not published here; any /v1/systemone
+#    server that supports `option_questions` works.
+cd path/to/julia
+JULIA_CHOICE_MODE=independent api/julia-api --host 127.0.0.1 --port 8011 --worker-socket /tmp/julia-api.sock --device cuda
+
+# 2. This bridge on :7866
+cd jev-spaceshooter-demo-julia1
+cp .env.example .env   # then set DJEV_URL=http://127.0.0.1:8011, DJEV_MODEL=julia-1
+go run ./demo/bridge --host 127.0.0.1 --port 7866
+```
+
+**Why `independent` mode.** The bridge asks multi-option questions written for an instruction-following LLM
+("pick the lowest tier number", "shoot if enemy_count>0"). Julia 1 cannot follow these, and its native
+multi-option answer is dominated by option *position*: listing fire options as `{shoot, cease}` or `{cease, shoot}`
+flips its answer with 0.99+ confidence. In `independent` mode the API scores each option on its own
+("Is this the right answer?" over the option text) and returns the highest, which removes the order bias.
+It ignores `state` and question instructions, so it only works because this bridge writes self-describing
+labels ("Tier 1 GOOD: …", "Rank 1 SAVE: …"). The bridge itself still does not rank or override answers.
+
+**Two judgements per path option.** For `path` the bridge also sends `option_questions`: Julia rates every
+label on "Is this the right answer?" (good at choosing among safe moves) and on the score "What happens to the ship?"
+(destroyed → trapped → survives with difficulty → completely safe). The API adds them with weights 1 and 3. The first
+alone ranks bad moves backwards (it scores DEADLY above RISKY or TRAP), which killed the ship in dense bullets. The
+outcome score keeps danger ordered. Each option's scores come back in `option_scores`; see them in the detail view.
+
+**Labels tuned for Julia.** Julia weighs motion words as heavily as safety (it rates "stationary" above "continues"),
+which caused jitter, so the path label only says "keeps course" for the move that continues the current heading. The
+oracle's tie-break was updated to the same fact.
+
+Lockstep simulation, 8 seeds × 60 s, 30 ms game-time latency (2026-09-28):
+
+| Upstream | dense-mid-speed | hardest | A→B→A flicker |
+| --- | --- | --- | --- |
+| Oracle (label-perfect rules, ceiling) | 60.0 s, 8/8 full, 0 hits | 60.0 s, 8/8 full, 0 hits | 3.8% |
+| Julia 1, native choice | 11.2 s, 0/8 | 8.3 s, 0/8 | 14% |
+| Julia 1, one judgement per option | 47.7 s, 3/8 | 43.1 s, 2/8 | 17% |
+| **Julia 1, two judgements + "keeps course" labels** | **60.0 s, 8/8, 4 hits** | **58.5 s, 7/8, 6 hits** | **7.8%** |
+
+Median upstream latency is about 65 ms (22 option judgements per decision), versus about 200 ms for the original 26B endpoint.
+
+## Event-log detail view
+
+Rows in the **Event log** tagged `djev` or `rejected` are clickable (›). Each opens the exact upstream
+`POST /v1/systemone` request body and the raw response, pretty-printed side by side, with status, latency and
+decision id. The bridge keeps the last 256 exchanges in memory (`GET /api/exchange?run_id=…&sequence=N`);
+the full history is still in each run's `events.jsonl`.
+
+---
+
+## Original README
 
 A browser space shooter for exploring a practical question: **how do you turn a changing, continuous environment into a small decision problem that a local model can solve quickly enough?**
 
