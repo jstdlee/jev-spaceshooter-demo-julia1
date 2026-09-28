@@ -1,15 +1,22 @@
-# Jev Space Shooter — Julia 1 edition
+# Jev Strike — Julia 1 edition
 
-> **This is the Julia 1 fork** of [`jev-spaceshooter-demo`](https://github.com/jstdlee/jev-spaceshooter-demo), kept separate so the original djev-spark setup stays untouched.
-> It plays against [SupersonicLabs/Julia-1](https://huggingface.co/SupersonicLabs/Julia-1) (a 144M-parameter mmBERT-small decision model) served by a local Go `julia-api` (a port of the Laya API; not included in this repository), and adds a retro pixel UI and an **event-log detail view**.
+A retro pixel space shooter built around one practical question: **how do you turn a fast, continuous game into a
+small decision problem that a local model can solve quickly enough to fly the ship?**
 
-## Demo videos
+In this edition the pilot is [SupersonicLabs/Julia-1](https://huggingface.co/SupersonicLabs/Julia-1), a
+144M-parameter decision model, served locally through a `/v1/systemone` REST API. Every decision (where to move,
+whether to fire, whether to bomb) comes from the model. The game reports facts and executes; it never picks a
+move for the model or rescues a bad one.
+
+It's a fork of [`jev-spaceshooter-demo`](https://github.com/jstdlee/jev-spaceshooter-demo), which ran the same
+game on a self-hosted 26B djev-spark endpoint. That repo stays untouched; this one is tuned for Julia 1.
 
 ![Julia 1 flying all four difficulty levels at once (1/3, 1/2, 3/4, 4/4, left to right and top to bottom)](docs/media/julia1/preview-all-difficulties.gif)
 
-Real-time recordings of the retro pixel UI, 1200×1200, autopilot only (no manual input). Each difficulty level
-sets all four threat sliders to that fraction of their range. Recorded 2026-09-28 against the local Julia 1 API
-(independent mode, two judgements per path option), one run per level with a 60-second cap:
+## Demo videos
+
+Real-time recordings, 1200×1200, autopilot only (no manual input). Each difficulty level sets all four threat
+sliders to that fraction of their range. Recorded 2026-09-28, one run per level, 60-second cap:
 
 | Level | Bullets · enemies · fast bullets · fast speed | Outcome | Video | Screenshot |
 | --- | --- | --- | --- | --- |
@@ -19,360 +26,238 @@ sets all four threat sliders to that fraction of their range. Recorded 2026-09-2
 | 4/4 | 8× · 6× · 100% · 4.8× | died at 32.1 s, score 1,068 | [MP4, 3.5 MB](docs/media/julia1/difficulty-4-4.mp4) | [PNG](docs/media/julia1/difficulty-4-4.png) |
 
 These are single runs, not benchmarks: the 1/3 run dying while the 1/2 run survived shows how much one run varies.
-For controlled numbers see the lockstep results below.
+Controlled numbers are under [Results](#results).
 
-## Retro UI
+## Why Julia 1
 
-The page renders the unchanged 960×620 arena into a 480×310 pixel buffer, scales it up with hard pixels, and uses
-an original pixel-art starfighter, a 16-colour arcade palette, CRT scanlines and a cockpit-style console. On
-desktop the whole UI scales to fit one screen (a square 1200×1200 frame or a wide layout, whichever gives the larger
-canvas); at 760 px and below it becomes a single scrolling column for phones. Only rendering and layout changed:
-the game core, controller and protocol are byte-identical and all tests pass.
+| | Julia 1 (this repo) | djev-spark 26B (original repo) |
+| --- | --- | --- |
+| Model | 144M parameters, mmBERT-small encoder + decision head | DiffusionGemma 26B-A4B NVFP4 |
+| Weights | 550 MiB FP32, Apache 2.0, open | large GPU model, patched vLLM runtime |
+| Decision latency | about 25 ms per decision on the live dashboard; 65 ms median, 79 ms p95 in lockstep traces with all 22 option judgements | about 180–230 ms idle, 380–400 ms under load |
+| Decisions per second | 15–40 | 4–5 |
+| Runs on CPU | yes (about 115 ms per 3-question request) | no |
+| Output | typed answers with full probabilities; nothing is generated, so nothing to parse | generated tokens mapped to choices |
+| Invalid answers in our runs | 0 | occasional API failures in the historical footage |
 
-![Retro UI at 1200×1200, 1/2 difficulty](docs/media/julia1/difficulty-1-2.png)
+What that buys in practice:
 
-## Julia 1 setup
+- **Reflexes.** A decision every few frames instead of every 12–14 frames. Fresh commands arrive before the forecast
+  goes stale, which matters most in dense bullet fields.
+- **Cheap to run.** It fits beside other workloads on one GPU, or runs on CPU; no model server stack beyond Python.
+- **Inspectable.** Every answer carries per-option probabilities and per-option scores (`option_scores`), shown in
+  the event-log detail view, so you can see *why* a move won.
+- **Same interface.** Julia answers the same `choice` / `score` / `noul` request envelope as djev and Laya, so the
+  bridge only needed Julia-specific wording, not a new protocol.
+
+And its limits, which shaped this fork:
+
+- **It compares options; it doesn't follow rules.** Instructions like "pick the lowest tier number" or "shoot if
+  enemy_count > 0" are ignored.
+- **Its native multi-option answer is dominated by option order.** Listing `{shoot, cease}` versus `{cease, shoot}`
+  flips the answer at 0.99 confidence, so the API scores each option independently instead.
+- **It reacts to words, not meaning.** "stationary" outscores "continues", and "collects weapon (power up)" reads as
+  *negative*. Rewording can fix a specific bias, but the effect of a phrase flips sign between contexts.
+- **It can't choose goals.** Asked to pick between "return to center", "collect the weapon" and "stay" from facts
+  (numeric or plain-language), it scored at chance, so it rarely detours for pickups.
+
+## The jev strategy: observe, forecast, label, decide, execute
+
+The model never sees pixels or raw physics. The game turns each moment into a small, labelled choice:
+
+```text
+HTML game (60 Hz): positions, velocities; forecasts all nine moves for 500 ms
+    │ POST /api/decision
+    ▼
+Go bridge: validate the observation, turn each forecast into a short factual label
+    │ POST /v1/systemone — one request, three questions: path, fire, bomb
+    ▼
+julia-api → Julia 1: judge every option, return typed answers with probabilities
+    │
+    ▼
+Bridge normalization → client freshness checks → game executes the command
+    └──────────────────────── next observation ────────────────────────┘
+```
+
+| Component | Does | Never does |
+| --- | --- | --- |
+| HTML game | simulates and renders; forecasts each of the nine moves; executes accepted commands | ranks moves, vetoes a dangerous choice, or steers on its own in autopilot |
+| Go bridge | validates, writes factual labels, calls the model, normalizes answers, keeps credentials server-side | chooses a winner or replaces an unsafe answer |
+| Julia 1 | picks one of nine paths, shoot or cease, hold or detonate | runs physics or sees future spawns |
+| Controller | checks run, sequence, response age and command expiry | decides which direction is safer |
+
+**Forecasting is substantial preprocessing.** The model selects from engineered physical forecasts; it doesn't
+discover collision geometry itself. This demonstrates structured model decisions over those facts, not end-to-end
+visual intelligence.
+
+All nine moves are always offered, even deadly ones. A valid but wrong choice is executed. Missing, invalid or stale
+answers produce a neutral hold-and-cease, a protocol rule rather than an evasive manoeuvre.
+
+### Labels
+
+Each move becomes one line that leads with a safety tier and then lists facts:
+
+```text
+Tier 1 GOOD: 9/9 escapes, open gap, open space, keeps course, toward center.
+Tier 3 RISKY: 6/9 escapes, grazing gap, near enemy, crowded.
+Tier 6 DEADLY: a threat hits the ship in 125 ms.
+```
+
+| Tier | Meaning (computed from the forecast) |
+| --- | --- |
+| 6 DEADLY | the move's own 500 ms lease, after the expected API wait, contacts a threat |
+| 5 DOOMED | the move is clear, but none of the nine follow-up moves is |
+| 4 TRAP | ends within 25 px of a wall |
+| 3 RISKY | fewer than 2 clear follow-ups, or the best continuation grazes a bullet (< 15 px) |
+| 2 OK | at least 2 clear follow-ups and at least a tight (≥ 15 px) gap |
+| 1 GOOD | at least 4 clear follow-ups, an open (≥ 40 px) gap, and ≥ 110 px from every enemy ship |
+
+The remaining words are facts for choosing within a tier: clear follow-ups (`escapes`), the best continuation's gap,
+`near enemy`, crowding at the endpoint, `near wall`, pickups (`collects …` / `toward …`), `toward center`, and
+`keeps course` for the move that continues the executing command.
+
+### How Julia is asked
+
+- **Path.** The bridge sends the nine labels with two per-option judgements (`option_questions`): *"Is this the
+  right answer?"* (good at choosing among safe moves) and the score *"What happens to the ship?"* (destroyed →
+  trapped → survives with difficulty → completely safe). The API adds them with weights 1 and 3. The first judgement
+  alone ranks bad moves backwards (DEADLY above RISKY), which killed the ship in dense moments; the outcome score
+  keeps danger in order. Weights were tuned offline on recorded states and checked on a holdout: 100% deadly-move
+  avoidance in crisis states, about 80% best-tier picks overall.
+- **Labels tuned for Julia.** Motion is stated only as `keeps course`. The other motion words (turns, reverses,
+  stationary) weighed as much as safety and caused jitter.
+- **Fire and bomb** are two-option choices scored the same independent way.
+- **Why independent scoring.** Each option is judged on its own text, so order can't bias the answer. The cost is
+  latency (22 judgements per decision) and ignoring the shared `state`, which works only because every label is
+  self-describing.
+
+## Results
+
+Lockstep simulation (game time pauses while a decision is in flight; answers apply 30 ms after the observation),
+8 seeds × 60 s:
+
+| Upstream | dense-mid-speed | hardest | A→B→A flicker |
+| --- | --- | --- | --- |
+| Oracle (reads the labels perfectly; upper bound) | 60.0 s, 8/8 full, 0 hits | 60.0 s, 8/8 full, 0 hits | 3.8% |
+| Julia 1, native multi-option choice | 11.2 s, 0/8 | 8.3 s, 0/8 | 14% |
+| Julia 1, one judgement per option | 47.7 s, 3/8 | 43.1 s, 2/8 | 17% |
+| **Julia 1, two judgements + Julia-tuned labels** | **60.0 s, 8/8, 4 hits** | **58.5 s, 7/8, 6 hits** | **7.8%** |
+
+`hardest` = 4× bullets, 3× enemies, 85% fast bullets at 2.4×; `dense-mid-speed` is the same at 1.7×. The oracle
+row shows the labels carry enough information; the remaining gap is the model's.
+
+The original djev-spark edition reported 5/6 full runs at a 120 s cap in its own lockstep setup (220 ms latency,
+older engine); the setups differ, so the numbers aren't directly comparable.
+
+## Game mechanics
+
+- **Pickups** float through the lower play area and fade over the last 2 s of a 14 s life: **B** bomb charge,
+  **W** weapon upgrade, **F** escort jet. They are collected by flying into them; the move labels say
+  `collects …` or `toward …`, and the model decides whether to go.
+- **Weapon levels** (W pickups, up to level 3): the gun fires 1, 3, 5, 5 spread shots, missile salvos grow
+  1, 2, 3, 3, and the missile cap rises from 4 to 6.
+- **Homing missiles** launch automatically while the model's fire answer is `shoot`, steer toward a predicted
+  intercept, and re-target when their target dies.
+- **Escort jets** (up to 8) ring the ship, each facing its own direction, and fire outward with every volley while
+  the ring orbits; their shots also destroy enemy bullets. A hit on the ship costs one jet; with no bombs left, a
+  detonate decision sacrifices a jet for the same blast.
+- **Bombs** start at 3 charges (max 6). A detonation destroys every enemy bullet and ship within 200 px; the boss
+  takes 20 damage instead. The model decides when, from ranked hold/detonate labels.
+- **Boss**: 40–60 s into a run, then 35–55 s after each boss dies, a 45-HP boss fires rotating rings, aimed fans
+  and homing missiles.
+- **Extra lives** every tenth wave, up to 5. Wave changes clear nothing.
+
+## Controls
+
+The run starts on autopilot, with Julia flying.
+
+| Input | Action |
+| --- | --- |
+| Arrow keys / WASD | fly manually (takes over from the autopilot) |
+| Space | pause / resume |
+| **Auto pilot** button | switch between Julia and manual flight |
+| **Restart run** button | start a new run |
+| Threat level sliders | change bullet density, enemy density, fast-bullet share and speed |
+
+Manual input, pausing, restarting or changing difficulty marks the run as not benchmark-qualified.
+
+## Run locally
+
+Requirements: a modern browser, Go 1.22+ for the bridge, Node.js 22 for the offline tests, and a `/v1/systemone`
+server that supports `option_questions`. The Julia API used here (`julia-api`, a Go port of the Laya API with a
+Python worker holding Julia 1) is a separate local project and is **not included** in this repository.
 
 ```bash
-# 1. Julia API on :8011, with independent choice scoring (see below).
-#    julia-api is a separate local project and is not published here; any /v1/systemone
-#    server that supports `option_questions` works.
+# 1. Julia API on :8011 with independent choice scoring
 cd path/to/julia
 JULIA_CHOICE_MODE=independent api/julia-api --host 127.0.0.1 --port 8011 --worker-socket /tmp/julia-api.sock --device cuda
 
 # 2. This bridge on :7866
+git clone https://github.com/jstdlee/jev-spaceshooter-demo-julia1.git
 cd jev-spaceshooter-demo-julia1
-cp .env.example .env   # then set DJEV_URL=http://127.0.0.1:8011, DJEV_MODEL=julia-1
+cp .env.example .env   # set DJEV_URL=http://127.0.0.1:8011 and DJEV_MODEL=julia-1
 go run ./demo/bridge --host 127.0.0.1 --port 7866
 ```
 
-**Why `independent` mode.** The bridge asks multi-option questions written for an instruction-following LLM
-("pick the lowest tier number", "shoot if enemy_count>0"). Julia 1 cannot follow these, and its native
-multi-option answer is dominated by option *position*: listing fire options as `{shoot, cease}` or `{cease, shoot}`
-flips its answer with 0.99+ confidence. In `independent` mode the API scores each option on its own
-("Is this the right answer?" over the option text) and returns the highest, which removes the order bias.
-It ignores `state` and question instructions, so it only works because this bridge writes self-describing
-labels ("Tier 1 GOOD: …", "Rank 1 SAVE: …"). The bridge itself still does not rank or override answers.
+Open http://127.0.0.1:7866/. Keep the bridge on loopback; the browser never sees the upstream API key.
 
-**Two judgements per path option.** For `path` the bridge also sends `option_questions`: Julia rates every
-label on "Is this the right answer?" (good at choosing among safe moves) and on the score "What happens to the ship?"
-(destroyed → trapped → survives with difficulty → completely safe). The API adds them with weights 1 and 3. The first
-alone ranks bad moves backwards (it scores DEADLY above RISKY or TRAP), which killed the ship in dense bullets. The
-outcome score keeps danger ordered. Each option's scores come back in `option_scores`; see them in the detail view.
+### Event-log detail view
 
-**Labels tuned for Julia.** Julia weighs motion words as heavily as safety (it rates "stationary" above "continues"),
-which caused jitter, so the path label only says "keeps course" for the move that continues the current heading. The
-oracle's tie-break was updated to the same fact.
+Rows tagged `djev` or `rejected` in the event log are clickable (›). Each opens the exact `POST /v1/systemone`
+request and the raw response, pretty-printed side by side with status, latency and decision id. The bridge keeps the
+last 256 exchanges in memory (`GET /api/exchange?run_id=…&sequence=N`); every run's full trace is in
+`demo/runs/<run_id>/events.jsonl` (gitignored).
 
-Lockstep simulation, 8 seeds × 60 s, 30 ms game-time latency (2026-09-28):
+### Retro UI
 
-| Upstream | dense-mid-speed | hardest | A→B→A flicker |
-| --- | --- | --- | --- |
-| Oracle (label-perfect rules, ceiling) | 60.0 s, 8/8 full, 0 hits | 60.0 s, 8/8 full, 0 hits | 3.8% |
-| Julia 1, native choice | 11.2 s, 0/8 | 8.3 s, 0/8 | 14% |
-| Julia 1, one judgement per option | 47.7 s, 3/8 | 43.1 s, 2/8 | 17% |
-| **Julia 1, two judgements + "keeps course" labels** | **60.0 s, 8/8, 4 hits** | **58.5 s, 7/8, 6 hits** | **7.8%** |
+The unchanged 960×620 arena is rendered into a 480×310 pixel buffer and scaled up with hard pixels, with an
+original pixel-art starfighter, a 16-colour palette, CRT scanlines and a cockpit console. On desktop the whole UI
+scales to fit one screen (a square 1200×1200 frame or a wide layout, whichever gives the larger canvas); at 760 px
+and below it becomes a single scrolling column for phones.
 
-Median upstream latency is about 65 ms (22 option judgements per decision), versus about 200 ms for the original 26B endpoint.
-
-## Event-log detail view
-
-Rows in the **Event log** tagged `djev` or `rejected` are clickable (›). Each opens the exact upstream
-`POST /v1/systemone` request body and the raw response, pretty-printed side by side, with status, latency and
-decision id. The bridge keeps the last 256 exchanges in memory (`GET /api/exchange?run_id=…&sequence=N`);
-the full history is still in each run's `events.jsonl`.
-
----
-
-## Original README
-
-A browser space shooter for exploring a practical question: **how do you turn a changing, continuous environment into a small decision problem that a local model can solve quickly enough?**
-
-The left panel is the game; the right panel shows observations, the model's selected action, the action actually executing, latency, request rate, and token throughput. Difficulty controls let you increase enemy count, bullet density, and the proportion and speed of fast bullets.
-
-This project uses a **self-hosted [djev-spark](https://github.com/mmastrac/djev-spark) model endpoint**, not the official hosted Jev service. In the current controller, djev chooses movement and firing. The client computes physical observations and executes the returned command; it does not secretly replace a bad tactical choice with a better one.
-
-This is a decision-modeling experiment, not a solved bullet-hell agent. It still makes mistakes, sometimes drifts toward boundaries, and remains sensitive to inference latency. The earlier 120-second survival target was withdrawn; no stable hardest-profile success is claimed.
-
-## Demo video
-
-**Historical prototype footage — not the current API-authoritative controller.** The supplied recording shows the earlier hybrid controller, including failed API requests and locally executed fallback actions. It illustrates the arena and dashboard, but must not be used as evidence that djev produced that play.
-
-[![Eight-second excerpt of the historical prototype, including its local-action and API-status panel](docs/media/historical-prototype-preview.gif)](https://raw.githubusercontent.com/jstdlee/jev-spaceshooter-demo/main/docs/media/space-shooter-demo.webm)
-
-**[Download the full recording — WebM, 14.5 MiB](https://raw.githubusercontent.com/jstdlee/jev-spaceshooter-demo/main/docs/media/space-shooter-demo.webm)** · [Still frame](docs/media/historical-prototype-poster.png)
-
-The inline animation is an 8-second, real-time excerpt; the original video is approximately 84.6 seconds. GitHub's file viewer does not preview the original at this size, so the full-recording link goes directly to the WebM for download and playback. Both assets are stored in this repository. See [media provenance](docs/media/README.md) for the source, conversion details, and limitations. Run the demo below for the current implementation; its measured results are listed separately under [Results](#results-and-their-limits).
-
-## Run locally
-
-### Dependencies
-
-- A modern browser for the HTML/Canvas game. No Gradio, React, npm install, or frontend build is needed.
-- Go **1.22+** for the HTTP bridge, using only the standard library.
-- A running **djev-spark structured API** at `POST /v1/systemone`.
-- Node.js **22** for the tested offline suites and optional CLI benchmarks; not needed just to open the game through the bridge.
-
-The development endpoint used DiffusionGemma 26B-A4B NVFP4 through djev-spark and its patched vLLM runtime. Model weights, GPU resources, containers, and their dependencies are **not bundled here**. Follow the upstream [djev-spark setup](https://github.com/mmastrac/djev-spark) for the model-serving environment and its licenses. A generic `/v1/chat/completions` endpoint is not a drop-in replacement.
-
-### Start the bridge
-
-```bash
-git clone https://github.com/jstdlee/jev-spaceshooter-demo.git
-cd jev-spaceshooter-demo
-cp .env.example .env
-```
-
-Edit `.env` to match your structured model server:
-
-```dotenv
-DJEV_URL=http://127.0.0.1:8011
-DJEV_API_KEY=
-DJEV_MODEL=jev-latest
-```
-
-`jev-latest` is the bridge's default compatibility identifier, **not a claim that an official Jev model is running**. Configure the identifier accepted by your own server. Set a bearer key only if the endpoint requires one. Process environment variables override `.env`; `.env` is ignored by Git.
-
-```bash
-go run ./demo/bridge --host 127.0.0.1 --port 7865
-```
-
-Open **[http://127.0.0.1:7865/](http://127.0.0.1:7865/)**. Watch both *valid djev commands* and *applied djev commands* increase. Opening the HTML with `file://` does not provide the API bridge. Run the command from the repository root (or pass `--demo-dir`). A green `/health` response checks the bridge only, not successful model inference.
-
-Keep the bridge on loopback for this local demo. The browser never needs the upstream API key. GitHub hosts the source and media, not a running model or bridge backend.
-
-## Who decides what?
-
-```text
-HTML game: positions, velocities, all nine physical path forecasts
-    │ POST /api/decision
-    ▼
-Go bridge: validate and compact the observations
-    │ POST /v1/systemone — one request, three choices
-    ▼
-Self-hosted djev-spark → local model
-    │ intent + movement path + shoot/cease
-    ▼
-Bridge normalization → client validity/freshness checks → game physics
-    └────────────────────── next observation ──────────────────────┘
-```
-
-| Component | Responsibility | Does not do |
-| --- | --- | --- |
-| HTML client | Render and simulate the game; observe positions/velocities; forecast each candidate path; execute accepted commands | Rank or filter tactical actions, veto a valid but dangerous direction, or supply fallback steering |
-| Go bridge | Validate schemas, compact factual inputs, call djev, normalize the three answers, keep credentials server-side | Choose a winner, synthesize a movement answer, or replace an unsafe answer |
-| Local djev model | Choose intent, one of nine paths, and shooting state | Run the game physics or inspect future random spawns |
-| Protocol controller | Check run/epoch/sequence, response age, and command expiry | Decide which direction is tactically safer |
-
-**Local trajectory calculation is still substantial preprocessing.** The model is not discovering collision geometry from pixels: it is selecting an action from engineered physical forecasts. What this demonstrates is structured model decision-making over those observations—not end-to-end visual intelligence or model-only trajectory prediction.
-
-All nine paths are offered, even when some forecast a collision. There is no safety mask, local ranking, bomb, local rescue controller, or independent autofire in model mode. A valid but tactically wrong model choice is executed. Invalid, missing, expired, or stale authorization instead produces neutral **hold + cease**; that is a protocol rule, not an evasive maneuver.
-
-### One atomic decision
-
-Each upstream request uses `samples: 1` and `steps: 1`, with three choice questions in the same call:
-
-| Choice | Values | Meaning |
-| --- | --- | --- |
-| `intent` | `evade`, `recover`, `position` | The model's description of its current intent |
-| `path` | `hold__medium`, four cardinal and four diagonal directions | Which movement to execute |
-| `fire` | `shoot`, `cease` | Whether the normal weapon cooldown may emit shots |
-
-For example, the answer fields may be:
-
-```json
-{
-  "answers": {
-    "intent": {"choice": "recover"},
-    "path": {"choice": "up_right__medium"},
-    "fire": {"choice": "shoot"}
-  }
-}
-```
-
-The bridge maps `up_right__medium` to `movement: "up_right"` and `lease: "medium"`. All three choices must validate together. Intent is descriptive: a `recover` label does not activate a hidden client-side return-to-center routine. It can disagree with the quality of the selected movement.
-
-Physics runs at 60 ticks/s. Each medium command authorizes at most **30 ticks / 500 ms**, and a newer valid answer can preempt it on the next tick. One request is pending per game; the next request starts after the previous one completes. Thus 500 ms is an authorization ceiling, not a mandatory wait between decisions. The current response-age limit is 600 ms. The request is deliberately lean: `state` is only `{"enemy_count": n}` and the intent question is gone, because every choice carries its own facts in its labels. Djev's latency grows sharply with numeric state: the former eight-field state plus intent question cost about 228 ms per call versus about 176 ms now in live play (108 ms idle), with fewer below-best picks. Earlier, Djev answered a distinct game state in about 185 ms (repeated identical payloads return in ~120 ms from its cache, which is why naive micro-benchmarks look faster); the bridge adds about 1 ms and the client about 25 ms, mostly waiting for the next 60 Hz tick. Keeping one request in flight is deliberate: in a deterministic lockstep simulation, overlapping requests (sending again before the previous answer lands) cut survival from ~90 s to ~25 s because each forecast assumes a command that is about to be replaced, and voting across three parallel `samples: 1` calls did not improve choices. Survival tracks latency instead: live hardest-profile runs at ~180 ms reached 88–121 s, while runs at ~300 ms died at 21–50 s.
-
-## Current decision model
-
-### Observations, not instructions disguised as scores
-
-The compact state contains the player, whether it is inside the center region, whether holding forecasts a collision, the hold-path gap, estimated API delay, waiting-prefix collision time, and enemy count. It does not send the complete game world or duplicate a large path table.
-
-Instead, each of the nine choice descriptions is a short label that leads with a **tier number** and then lists physical facts in words:
-
-```text
-Tier 1 GOOD: 7/9 escapes, open gap, open space, continues, toward center.
-Tier 2 OK: 6/9 escapes, tight gap, near enemy, busy space, turns.
-Tier 6 DEADLY: a threat hits the ship in 125 ms.
-```
-
-| Tier | Meaning (computed from the forecast, never from a preferred answer) |
-| --- | --- |
-| 6 DEADLY | The move's own lease (after the expected API wait) contacts a current threat |
-| 5 DOOMED | The move is clear, but none of the nine follow-up moves over the next 500 ms is clear |
-| 4 TRAP | Ends within 25 px of a wall |
-| 3 RISKY | Fewer than 2 clear follow-ups, or the best continuation grazes a bullet (<15 px) |
-| 2 OK | At least 2 clear follow-ups and at least a tight (≥15 px) gap |
-| 1 GOOD | At least 4 clear follow-ups, an open (≥40 px) gap, and ≥110 px from every enemy ship |
-
-A move that holds still, reverses the executing command, or ends within 70 px of a wall drops one tier (GOOD→OK, OK→RISKY). Djev follows the leading tier number about 97–99% of the time but largely ignored the same preferences when they were only words within a tier: about 20% of its picks held still or reversed, and it slid along walls.
-
-The remaining words are facts for choosing within a tier: the number of clear follow-up moves (`escapes`), the best continuation's bullet gap, whether the path passes within 110 px of an enemy ship (enemies fire point-blank as they drift down), how many threats will be within 110 px of the endpoint (`open space` / `busy space` / `crowded`), how the move relates to the command already executing (`stationary`, `continues`, `turns`, `reverses`; wave-1 enemies aim at the ship's current position), and `toward center` when the endpoint is at least 15 px closer to center.
-
-Why this encoding: measured on recorded states, Djev picked a path ending against a wall in 33% of decisions when given nine rows of raw numbers, even though it almost never picked `collision=true`; 9 of 11 hits were at a wall. Prose tiers cut below-best picks to about 8%; the leading tier number cut them to about 1%.
-
-The forecast accounts for the active command during expected API wait, then the proposed movement for the 500 ms lease, then each follow-up move for another 500 ms. Existing bullets use observed velocity; enemies use a current-linear approximation. Future shots/spawns and hidden random state are excluded. A missing clearance measurement is not a promise of safety, especially when invulnerability covers the window.
-
-The current fire question asks the model to shoot when enemies exist; it is not a sophisticated target-pursuit planner.
-
-### Cockpit view
-
-The page is a sci-fi cockpit around the unchanged arena. The **nav computer** under the arena is a 3×3 compass of the exact ranked labels djev chose from (the bridge returns them with each decision as `labels`); each cell shows its tier (1 green … 6 red) and facts, and djev's pick glows with its path confidence. **Command link** shows the bomb labels with djev's hold/detonate call and the fire call. The title bar carries a djev link light, the last latency, decisions per second, and a latency sparkline. The **threat level** sliders go up to 8× bullets, 6× enemies, 100% fast bullets, and 4.8× fast speed (enemy fire interval floor 0.09 s); the benchmark `hardest` profile is unchanged.
-
-### Missiles, bombs, and pickups
-
-- **Pickups** float and bounce through the lower play area (y 260–560, away from the enemy formation) and fade out over the last 2 s of a 14 s life. Bomb pickups (orange orbs, first at 6 s, then every 11 s) add a bomb; weapon blocks (color-cycling squares, first at 9 s, then every 17 s) raise the weapon level up to 3: the gun fires 1, 3, 5, 5 spread shots and the missile cap is 4, 5, 6, 6. Spawn positions come from the seeded game RNG, so replays match.
-- **Collecting is a Djev decision.** Each path label says `collects bomb`/`collects weapon` when the move's path touches a wanted pickup, or `toward …` when it closes in by 20 px. A collecting move rises one tier; while a wanted pickup is reachable, safe moves that ignore it drop one. With only the rise, Djev gathered 24 of 96 pickups and survived 3/6 lockstep runs; with both, 41 of 101 and 5/6.
-- **Escort jets** (green "F" triangles; first at 14 s, then every 16 s) add up to 8 little jets that ring the ship, each facing its own direction (left, right, the four diagonals, up, down) and firing outward with every volley. Their shots destroy enemies and also enemy bullets and missiles; the first two jets add a missile to every salvo. The ring orbits the ship at 1.6 rad/s, so the outward shots sweep every direction. A hit on the ship costs one jet. When bombs run out, a detonate decision makes one jet self-destruct for the same blast; the bomb labels say so. Jet and weapon pickups are the proactive goal: "toward" points at them before any bomb pickup, and collecting one lifts a safe move two tiers.
-- **Random boss**: 40–60 s into a run, then 35–55 s after each boss dies, a boss (45 HP) parks near the top and fires rotating 14-bullet rings every 2.4 s, 7-bullet aimed fans every 1.8 s, and pairs of slow homing missiles every 4.5 s. Missiles and any player shot can destroy its homing missiles; a bomb deals it 20 damage instead of destroying it outright. The forecast treats its homing missiles as straight-moving threats, like bullets.
-- **Missile salvos**: weapon level fires 1, 2, 3, 3 fanned missiles per launch, each at a different target.
-- **Extra lives**: clearing every tenth wave (reaching wave 11, 21, …) grants one life, up to 5.
-- **Wave changes clear nothing.** Bullets and missiles already in flight finish their paths.
-
-- **Homing missiles** launch automatically every 0.5 s (4 in flight at weapon level 0, up to 6) while the active Djev command authorizes `shoot`. Each steers toward its target's predicted intercept point at up to 6 rad/s and 420 px/s, deals 1 damage, and expires after 2.5 s; if its target dies it re-targets the enemy with the shortest intercept time. Guidance is weapon physics, like a bullet's flight; Djev still decides whether to fire at all.
-- **Bombs**: start with 3 charges, up to 6 by collecting bomb pickups. A detonation destroys every enemy bullet and enemy ship within 200 px of the ship. Djev decides with a fourth choice question (`hold` / `detonate`). Like paths, each choice leads with a rank: `Rank 1 USE NOW` for detonate only when every move is tier 5 or 6 and the blast would destroy something, otherwise `Rank 1 SAVE` for hold; both state what a blast would destroy and how many charges remain. With the reasons only in prose, Djev detonated in 1 of 14 such emergencies. A decision detonates at most once, even though its command lasts up to 500 ms.
-
-Results (hardest = 4× bullets, 3× enemies, 85% fast bullets at 2.4×):
-
-| Controller | Before missiles/bombs | After |
-| --- | --- | --- |
-| Perfect label reader, lockstep sim, hardest | 93 s mean, 1/8 full | 16/16 full 120 s runs |
-| Djev, lockstep sim, browser 3.5×/2.75× settings | died at ~40 s live | 5/6 full, shortest 97.9 s |
-| Djev, real-time CLI benchmark, hardest (seeds 20260920, 7, 11) | 29 s on seed 20260920 | 106 s, 121 s, 121 s |
-
-### Tactical priorities sent to djev
-
-1. Always pick from the lowest tier number present.
-2. Within that tier: more escapes, then not stationary or reversing, then not near an enemy ship, then open space, then toward center. Center is a way to gain space, not a place to hold.
-3. If every move is DEADLY, pick the latest predicted contact. This only buys time.
-
-These are **model instructions**, not conditional steering code in the game. The model can fail to follow them. The shared framing is in [strategy.md](demo/strategy.md); factual option construction and question-specific instructions are in [decision.go](demo/bridge/decision.go), especially `pathTable`, `pathLabel`, `packModelContext`, and `buildUpstreamPayload`.
-
-## Difficulty: why “just dodge” is not enough
-
-| Setting | Browser default | `dense-mid-speed` | `hardest` |
-| --- | ---: | ---: | ---: |
-| Bullet density | 1× | 4× | 4× |
-| Enemy density | 1× | 3× | 3× |
-| Fast-bullet proportion | 0% | 85% | 85% |
-| Fast-bullet speed multiplier | 1.6×, inactive at 0% | 1.7× | 2.4× |
-
-The firing baseline is **0.95 seconds**, twice the firing frequency of the earlier 1.9-second baseline. At 4× density, the interval is 0.2375 seconds; projectile patterns can emit more than one bullet. Enemy density changes enemy count, while fast-bullet proportion controls which new bullets receive the speed multiplier. Sliders change the environment, not model intelligence.
-
-Several objectives compete:
-
-- **Immediate safety vs. future room.** A large gap at the edge can be a trap one decision later. Always maximizing clearance can push the ship into a corner.
-- **Recovery vs. crossing danger.** Always moving toward center can cross a stream that a temporarily outward step would avoid.
-- **Prediction vs. delay.** A correct snapshot decision may arrive too late; newly fired close-range bullets were not present in the snapshot.
-- **Movement size vs. frequency.** Long sweeps cross unobserved danger. Short authorizations help only when fresh decisions arrive often enough.
-- **Shooting vs. positioning.** Survival, firing opportunity, and wave completion are different objectives; surviving with enemies still alive is not clearing the game.
-
-The current player remains 20 × 18 pixels, starts with three lives, moves at 112 px/s under model control, and uses a 0.17-second weapon cooldown. The latest prompt experiments did not improve scores by changing these physics, difficulty, hitboxes, or invulnerability.
-
-## How the strategy was discovered
-
-The useful loop was **form a hypothesis → change one representation or instruction → test fixed situations → try new situations → run real games → keep or reject the change**.
-
-We compared larger contexts, compact path tables, inline factual choice descriptions, different recovery instructions, and single-call versus staged questions. Putting facts beside each option reduced the model's need to join a state table to a separate action list. Removing duplicated information retained useful observations without increasing round-trip time. Separate/staged questions cost roughly 460–480 ms in development probes and did not justify that delay for this controller.
-
-In one 22-case development comparison, the path-table formulation selected a colliding route despite clear alternatives eight times; the adopted inline formulation did so zero times. **Those cases were used for tuning, not held-out proof.** Extra fields and stronger center-return wording sometimes improved selected fixtures while producing worse continuous play. A later “enough clearance, then return inward” candidate was not retained because live runs did not establish a benefit, with concurrent load also confounding the comparison.
-
-For a useful experiment:
-
-1. Keep physics, difficulty, seed, model configuration, and time limit explicit.
-2. Include corners, clear center, incoming bullets, blocked centerward routes, and unavoidable-collision situations—not just successful examples.
-3. Test a new seed or situation after tuning; once used to tune, it is no longer a holdout.
-4. Measure actual survival, remaining lives, score/wave, invalid answers, latency, and applied-command rate. A correct intent label alone is insufficient.
-5. Run one game against the model when comparing prompts. Browser preview plus CLI testing shares inference capacity.
-6. Preserve a better-performing version when a more elaborate decision tree fails to generalize.
-
-## Results and their limits
-
-Development observations from **2026-09-20**, using the adopted inline-choice formulation and `dense-mid-speed`, with a 45-second test limit:
-
-| Seed / attempt | Outcome | Lives left | API calls | Median API latency |
-| --- | --- | ---: | ---: | ---: |
-| 20260921 | Reached 45-second stop | 3 | 205 | 201 ms |
-| 20260920 | Died at 42.9 s | 0 | 184 | 203 ms |
-| 20260922, first | Died at 20.5 s | 0 | 52 | 377 ms |
-| 20260922, repeat | Reached 45-second stop | 1 | 112 | 378 ms |
-
-All four returned valid protocol choices, but two runs still died. The latter two overlapped browser inference; the second run also overlapped near its end. They are not a controlled, statistically significant comparison. Reaching the test stop means survival was observed **up to that stop**, not that the ship subsequently survived indefinitely. Results are development-log summaries; raw local run directories are not shipped in this repository.
-
-An earlier formulation reached 64.15 seconds in a different development run. That result is not attributed to this prompt. There is **no demonstrated stable 120-second survival or hardest-profile pass**. The older target is no longer a completion gate; legacy qualification fields in the runner may still refer to it.
-
-Typically, an otherwise idle endpoint completed a decision in about 200–230 ms: roughly 4–5 decisions/s, not 60 decisions/s. Concurrent games increased observed latency to about 380–400 ms. Game physics continuing at 60 Hz does not make a 200 ms model decision a 60 Hz reflex.
-
-## Lockstep simulation
-
-`demo/lockstep_sim.cjs` replays the production path (core, controller, and bridge labels) in game time: it pauses while a decision is in flight and applies each answer `--latency-ms` after its observation. Pair it with a bridge started with `--upstream oracle` to measure whether the labels carry enough information (no model call), or with a normal bridge to measure Djev itself:
-
-```bash
-go run ./demo/bridge --port 7870 --upstream oracle --runs-dir /tmp/sim-runs
-node demo/lockstep_sim.cjs --url http://127.0.0.1:7870 --seeds 1-8 --profile hardest
-```
-
-## Tests and optional benchmarks
-
-Offline tests require no running model:
+## Tests and simulation
 
 ```bash
 node demo/test_space_shooter_logic.cjs
 node demo/test_benchmark.cjs
-node demo/test_strategy_regression.cjs
+node demo/test_strategy_regression.cjs   # needs Go on PATH
 go test ./demo/bridge/
 ```
 
-The publication check covers 49 core/controller/UI cases, 47 benchmark cases, 10 scenario-harness cases, and 25 Go bridge cases: **131 tests**. The scenario harness runs the bridge's event validator through `go run`, so Go must be on `PATH` (or set `GO`). These validate software behavior, not tactical quality.
-
-With the bridge and model running, pause other model-controlled games before a bounded live test:
+These check software behaviour, not tactical quality. To measure tactics without the browser:
 
 ```bash
-node demo/benchmark.cjs --seed 20260921 --profile dense-mid-speed --target-seconds 45 --url http://127.0.0.1:7865
+go run ./demo/bridge --port 7870 --upstream oracle --runs-dir /tmp/sim-runs   # label ceiling, no model
+go run ./demo/bridge --port 7871 --runs-dir /tmp/sim-runs                     # the real model
+node demo/lockstep_sim.cjs --url http://127.0.0.1:7871 --seeds 1-8 --profile hardest --latency-ms 30
 ```
 
-Use `--profile hardest` only when deliberately testing the 2.4× fast-bullet setting, and label it accordingly. The physical simulation is seeded; full live games are not necessarily repeatable because response timing and model output can differ.
+Run one simulation at a time against a local model: concurrent runs share inference capacity and skew results.
 
-```bash
-# Fixed diagnostic situations; not a survival benchmark.
-node demo/strategy_regression.cjs --url http://127.0.0.1:7865
+## Difficulty: why "just dodge" is not enough
 
-# Optional replay of your own local run.
-node demo/benchmark.cjs --replay demo/runs/<run_id>/events.jsonl
-```
+| Setting | Browser default | `dense-mid-speed` | `hardest` | slider max |
+| --- | ---: | ---: | ---: | ---: |
+| Bullet density | 1× | 4× | 4× | 8× |
+| Enemy density | 1× | 3× | 3× | 6× |
+| Fast-bullet proportion | 0% | 85% | 85% | 100% |
+| Fast-bullet speed | 1.6× | 1.7× | 2.4× | 4.8× |
 
-The scenario harness retains strict recovery/position expectations from the design process. A live model can fail them even when offline harness tests pass. Do not weaken an expectation merely to advertise a better pass rate. Pausing, manual input, restarting, changing difficulty, or excessive scheduling lag prevents treating that browser run as a controlled benchmark.
-
-### Reading the dashboard
-
-- **Selected vs. executing:** receiving a response is not the same as applying a fresh command.
-- **API token throughput:** reported input plus output tokens divided by request duration; **not generation/decode TPS**.
-- **Requests/s:** completed calls over the recent window, not the animation frame rate.
-- **Intent probability `p`:** confidence in the returned label, not calibrated survival probability.
-- **Run integrity:** recording completeness, not a survival or strategy success badge.
-
-Existing local JSONL logging and replay remain available; they are optional development tools, not the focus of this demo. `.env`, credentials, model weights, raw API-state dumps, and generated run directories must not be committed. Review diagnostic files before sharing because they may contain endpoint identifiers or local paths.
+Several objectives compete: immediate safety against room for the next move (a wide gap at the edge becomes a trap),
+recovering toward the center against crossing a stream, prediction against latency, and shooting against positioning.
+The ship is 20×18 px, starts with three lives, and moves at 112 px/s under model control.
 
 ## What we learned
 
-**Designing the decision problem is much of the work.** Choosing useful observations, time horizons, action granularity, competing objectives, and acceptance tests took repeated modeling and regression experiments. It resembles a training/evaluation loop in effort and discipline, but **no model weights were trained**: the work tuned prompts, context, and action representation around a fixed local model.
+- **Designing the decision problem is much of the work.** Observations, horizons, action granularity and label
+  wording decided more than model choice. No weights were trained; the work shaped the questions around a fixed model.
+- **Validity is not competence.** A perfectly formatted, high-confidence answer can still steer into danger; this
+  demo executes it rather than silently rescuing it.
+- **Small models need questions they can answer.** Julia 1 was fast and reliable once each option was judged on its
+  own and the labels used words it reads the right way round; asking it to apply rules, compare numbers or pick goals
+  failed.
+- **Measure against a ceiling.** The oracle upstream shows whether a failure comes from missing information or from
+  the model. Tune on recorded states, confirm on a holdout, then on seeds, one run at a time.
 
-**A good-looking demo can prove the wrong thing.** The earlier hybrid controller used fast local collision screening, ranking, and overrides; the model only helped choose within a locally constrained problem. That architecture can work well as a fast safety controller plus a slower policy, but its survival cannot be credited to the model alone. Establishing the model's incremental benefit would require an otherwise matched local-only ablation. The supplied video makes this distinction especially important: it shows local movement even while API calls fail.
-
-**Validity is not tactical competence.** A perfectly formatted answer, a plausible `recover` label, or high confidence can still steer into danger. The current implementation deliberately exposes those mistakes rather than silently rescuing them.
-
-**More context and more rules are not automatically better.** Extra facts increase reading/comparison work; extra API stages cost reaction time. “Maximize clearance,” “always return to center,” and “move more frequently” each fail in some situations. Priorities must be tested together under the actual latency budget.
-
-**Regression testing is part of strategy discovery.** Preserve difficult situations, compare multiple seeds, separate tuned cases from holdouts, keep difficulty fixed, and report unsuccessful runs alongside successes. A static improvement may not survive a moving environment. Prefer measured, bounded claims over a polished animation or one lucky long run.
+The full design history of the djev-spark edition, including its tier design experiments and live results, is in the
+[original repository](https://github.com/jstdlee/jev-spaceshooter-demo#readme).
