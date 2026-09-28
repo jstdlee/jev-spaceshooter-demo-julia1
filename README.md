@@ -117,6 +117,13 @@ The remaining words are facts for choosing within a tier: clear follow-ups (`esc
 `near enemy`, crowding at the endpoint, `near wall`, pickups (`collects …` / `toward …`), `toward center`, and
 `keeps course` for the move that continues the executing command.
 
+**Home zone.** The central ¾ of the arena's width and height (x 120–840, y 78–543) is the home zone, drawn as a faint
+dotted frame that turns amber while the ship is outside. A safe move (tier 1–2) that ends outside it without heading
+back drops one tier and is labelled `leaves zone` or `outside zone`; moves that re-enter or close in by 10 px say
+`back to zone`. Danger tiers are never changed, so the ship can still leave the zone to dodge, and it returns as soon
+as a safe way back exists. In a 4-seed dense-mid-speed lockstep check, time outside the zone fell from 41.5% to 22.4%
+with 4/4 full runs and 0 hits.
+
 ### How Julia is asked
 
 - **Path.** The bridge sends the nine labels with two per-option judgements (`option_questions`): *"Is this the
@@ -183,9 +190,10 @@ older engine); the setups differ, so the numbers aren't directly comparable.
 - **Extra lives** for clearing every fifth wave (waves 6, 11, 16, … start with one), up to 5. Wave changes clear
   nothing. Each new wave shows a short briefing over the arena (visual only; the simulation keeps running).
 - **Auto ramp** (page demo pacing, autopilot only, on by default; `?autoramp=0` or the **Auto ramp** button turns it
-  off): every 20 s of autopilot mission time the four threat sliders rise by 4 % of their ranges (never below where
-  you set them), about 8 minutes to the maximum. Each step is recorded as `difficulty_changed`
-  (`source: "auto_ramp"`) plus a checkpoint, and makes the run not benchmark-qualified.
+  off): every 10 waves flown on autopilot, the four threat sliders rise by 10 % of their ranges (never below where
+  you left them), reaching the maximum around wave 100. Manual flight, pause, or turning it off restarts the 10-wave
+  count. Each step is recorded as a `difficulty_changed` event (`source: "auto_ramp"`) plus a checkpoint, and makes
+  the run not benchmark-qualified.
 
 ## Controls
 

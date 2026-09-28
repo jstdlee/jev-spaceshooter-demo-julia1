@@ -58,9 +58,14 @@ const (
 	goodMinEscapes   = 4
 	okMinEscapes     = 2
 	centerProgressPx = 15
-	pathInstructions = "Pick the move that keeps the ship alive. Each move starts with its tier number: 1 is best, 6 is worst. Always pick a move with the lowest tier number present. Within that tier prefer more escapes, then keeps course, then not near enemy, then open space, then toward center. If every move is tier 6, pick the one hit latest."
-	fireInstructions = "Choose shoot if enemy_count>0, otherwise cease. Shoot also launches homing missiles."
-	bombInstructions = "Pick the choice with rank 1. Collect floating bomb pickups to refill charges."
+	// Home zone: the central 3/4 of the arena's width and height. A safe move that ends outside it
+	// without closing in by zoneProgressPx drops one tier, so the ship returns when it safely can.
+	zoneMinX, zoneMaxX = 120.0, 840.0
+	zoneMinY, zoneMaxY = 77.5, 542.5
+	zoneProgressPx     = 10
+	pathInstructions   = "Pick the move that keeps the ship alive. Each move starts with its tier number: 1 is best, 6 is worst. Always pick a move with the lowest tier number present. Within that tier prefer more escapes, then keeps course, then not near enemy, then open space, then toward center. If every move is tier 6, pick the one hit latest."
+	fireInstructions   = "Choose shoot if enemy_count>0, otherwise cease. Shoot also launches homing missiles."
+	bombInstructions   = "Pick the choice with rank 1. Collect floating bomb pickups to refill charges."
 	// bombUrgentTier is the best path tier at which the detonate label reports that no safe move exists.
 	bombUrgentTier    = 5
 	intentInstruction = "Classify current intent."
@@ -286,9 +291,21 @@ type PathRow struct {
 	EscapeGapPx     *float64
 	EnemyGapPx      *float64
 	Motion          string
-	PickupCollect   string // wanted pickup this move's path touches, or ""
-	PickupToward    string // wanted pickup this move closes in on, or ""
-	PickupWanted    bool   // any move collects or approaches a wanted pickup
+	PickupCollect   string  // wanted pickup this move's path touches, or ""
+	PickupToward    string  // wanted pickup this move closes in on, or ""
+	PickupWanted    bool    // any move collects or approaches a wanted pickup
+	ZoneStartOut    float64 // ship's distance outside the home zone now (0 inside)
+	ZoneEndOut      float64 // the move endpoint's distance outside the home zone (0 inside)
+}
+
+// zoneOutside is how far a point lies outside the home zone along x plus along y (0 inside).
+func zoneOutside(x, y float64) float64 {
+	return math.Max(0, math.Max(zoneMinX-x, x-zoneMaxX)) + math.Max(0, math.Max(zoneMinY-y, y-zoneMaxY))
+}
+
+// zoneReturning reports whether a move from outside the zone re-enters it or closes in by at least zoneProgressPx.
+func (row PathRow) zoneReturning() bool {
+	return row.ZoneStartOut > 0 && (row.ZoneEndOut == 0 || row.ZoneEndOut <= row.ZoneStartOut-zoneProgressPx)
 }
 
 func pathTable(value any, player *packedPlayer, currentMovement string) ([]PathRow, error) {
@@ -366,6 +383,8 @@ func pathTable(value any, player *packedPlayer, currentMovement string) ([]PathR
 			GapRaw:          gapRaw,
 			WallRoom:        wallRoom,
 			CenterProgress:  round(centerDistance-math.Hypot(*endX-ArenaCenterX, *endY-ArenaCenterY), 1),
+			ZoneStartOut:    round(zoneOutside(player.x, player.y), 1),
+			ZoneEndOut:      round(zoneOutside(*endX, *endY), 1),
 			Crowd:           crowd,
 			MoveCollisionMs: moveContact,
 			EscapeOptions:   escapes,
@@ -406,6 +425,12 @@ func pathTier(row PathRow) string {
 	// still, reversing, or ending near a wall costs one tier. Djev follows the leading tier
 	// number reliably but largely ignores within-tier word preferences.
 	if row.Motion == "stationary" || row.Motion == "reverses" || row.WallRoom < nearWallRoomPx {
+		tier = shiftTier(tier, 1)
+	}
+	// Staying in the home zone is positional, like the wall rule: a safe move that ends outside the
+	// zone without returning to it costs one tier. Danger tiers are never changed, so the ship can
+	// still leave the zone to dodge, and a wanted pickup below can still lift the move back.
+	if row.ZoneEndOut > 0 && !row.zoneReturning() {
 		tier = shiftTier(tier, 1)
 	}
 	// Supplies are a strategic goal, so they live in the rank Djev follows: collecting a wanted
@@ -492,6 +517,14 @@ func pathLabel(row PathRow) string {
 	// rates "stationary" above "continues"), so only the course-keeping fact is stated.
 	if row.Motion == "continues" {
 		parts = append(parts, "keeps course")
+	}
+	switch {
+	case row.zoneReturning():
+		parts = append(parts, "back to zone")
+	case row.ZoneEndOut > 0 && row.ZoneStartOut == 0:
+		parts = append(parts, "leaves zone")
+	case row.ZoneEndOut > 0:
+		parts = append(parts, "outside zone")
 	}
 	if row.CenterProgress > centerProgressPx {
 		parts = append(parts, "toward center")

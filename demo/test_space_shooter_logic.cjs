@@ -392,15 +392,18 @@ test('demo auto-ramp raises every threat slider through the live difficulty path
   assert.equal(adapter.getState().rampLevel, 0);
   const runId = adapter.getState().runState.id;
 
-  adapter.autoRampTick(19999);
-  assert.equal(game.difficulty.bulletDensity, 1, 'nothing before 20 s');
-  adapter.autoRampTick(1);
-  assert.equal(adapter.getState().rampLevel, 0.04);
-  // 4% of 1..8 is 1.28, snapped to the 0.25 slider step; the fast speed stays at its higher default.
-  assert.equal(game.difficulty.bulletDensity, 1.25);
+  const toWave = (wave) => { game.wave = wave; adapter.autoRampTick(); };
+  toWave(game.wave); // opens the first 10-wave window
+  const start = game.wave;
+  toWave(start + 9);
+  assert.equal(game.difficulty.bulletDensity, 1, 'nothing before 10 waves');
+  toWave(start + 10);
+  assert.equal(adapter.getState().rampLevel, 0.1);
+  // 10% of 1..8 is 1.7, snapped to the 0.25 slider step; the fast speed stays at its higher default.
+  assert.equal(game.difficulty.bulletDensity, 1.75);
   assert.equal(game.difficulty.fastBulletSpeed, 1.6, 'never lowered below where the slider was');
-  assert.equal(element('bullet-density').value, 1.25, 'the slider UI follows');
-  assert.equal(element('bullet-density-value').textContent, '1.25x');
+  assert.equal(element('bullet-density').value, 1.75, 'the slider UI follows');
+  assert.equal(element('bullet-density-value').textContent, '1.75x');
   assert.ok(adapter.getState().history.some((row) => row.kind === 'threat' && /^THREAT UP/.test(row.text)));
   assert.equal(adapter.getState().qualification.valid, false, 'a ramped run is not benchmark-qualified');
   await adapter.drainTrace();
@@ -418,25 +421,27 @@ test('demo auto-ramp raises every threat slider through the live difficulty path
   element('fast-bullet-speed').value = '1.6';
   adapter.readDifficultyControls({ type: 'change' });
   assert.equal(game.difficulty.bulletDensity, 6);
-  adapter.autoRampTick(20000);
+  toWave(start + 20);
   assert.equal(game.difficulty.bulletDensity, 6, 'the user setting is kept');
-  assert.equal(game.difficulty.enemyDensity, 1.25, 'the others ramp from their values');
+  assert.equal(game.difficulty.enemyDensity, 1.5, 'the others ramp from their values (the ramp restarts from the lowest slider)');
 
   // Manual flight pauses the ramp; turning it off stops it.
   adapter.setAutopilot(false);
-  adapter.autoRampTick(60000);
-  assert.equal(game.difficulty.enemyDensity, 1.25, 'paused in manual mode');
+  toWave(start + 40);
+  assert.equal(game.difficulty.enemyDensity, 1.5, 'paused in manual mode');
   adapter.setAutopilot(true);
+  toWave(start + 45);
+  assert.equal(game.difficulty.enemyDensity, 1.5, 'manual waves do not count toward the window');
   adapter.setAutoRamp(false);
-  adapter.autoRampTick(60000);
-  assert.equal(game.difficulty.enemyDensity, 1.25, 'off');
+  toWave(start + 80);
+  assert.equal(game.difficulty.enemyDensity, 1.5, 'off');
   adapter.setAutoRamp(true);
 
-  // From zero, 25 steps (about 8 minutes) reach the top of every range.
+  // From zero, 10 steps (about 100 waves) reach the top of every range.
   for (let i = 0; i < 30; i += 1) adapter.applyAutoRampStep();
   assert.equal(adapter.getState().rampLevel, 1);
   assert.deepEqual(plain(game.difficulty), { bulletDensity: 8, enemyDensity: 6, fastBulletRatio: 1, fastBulletSpeed: 4.8 });
-  assert.ok(adapter.AUTO_RAMP.interval_ms / adapter.AUTO_RAMP.step / 60000 <= 8.4);
+  assert.equal(adapter.AUTO_RAMP.every_waves / adapter.AUTO_RAMP.step, 100);
   await adapter.endRun('aborted');
 });
 

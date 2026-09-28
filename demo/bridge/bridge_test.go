@@ -262,9 +262,12 @@ func TestCenterProgressAndNullGapLabels(t *testing.T) {
 		request := requestFor(t, body)
 		criteria, _, err := buildPathCriteria(request)
 		must(t, err)
+		// The ship starts 7.5 px below the home zone: re-entering it is "back to zone".
 		want := "Tier 3 RISKY: 6/9 escapes, open gap, near enemy, busy space"
 		if tc.toward {
-			want += ", toward center"
+			want += ", back to zone, toward center"
+		} else {
+			want += ", outside zone"
 		}
 		if criteria.Get("hold__medium") != want+"." {
 			t.Fatalf("end_y %s: %q", tc.endY, criteria.Get("hold__medium"))
@@ -1062,5 +1065,44 @@ func TestRoundMatchesPython(t *testing.T) {
 		if got := round(tc.in, digits); got != tc.want {
 			t.Fatalf("round(%v,%d)=%v want %v", tc.in, digits, got, tc.want)
 		}
+	}
+}
+
+func TestHomeZoneTierAndTags(t *testing.T) {
+	row := func(startX, startY, endX, endY float64) PathRow {
+		return PathRow{EscapeOptions: 9, WallRoom: 200, Motion: "continues",
+			ZoneStartOut: zoneOutside(startX, startY), ZoneEndOut: zoneOutside(endX, endY)}
+	}
+	cases := []struct {
+		name string
+		r    PathRow
+		tier string
+		tag  string
+	}{
+		{"inside stays inside", row(480, 300, 500, 300), "GOOD", ""},
+		{"inside leaves", row(480, 530, 480, 580), "OK", "leaves zone"},
+		{"outside returns", row(480, 600, 480, 560), "GOOD", "back to zone"},
+		{"outside re-enters from just outside", row(480, 548, 480, 530), "GOOD", "back to zone"},
+		{"outside drifts along", row(480, 600, 520, 600), "OK", "outside zone"},
+		{"outside moves further out", row(60, 300, 20, 300), "OK", "outside zone"},
+	}
+	for _, tc := range cases {
+		if got := pathTier(tc.r); got != tc.tier {
+			t.Errorf("%s: tier %s, want %s", tc.name, got, tc.tier)
+		}
+		label := pathLabel(tc.r)
+		if tc.tag != "" && !strings.Contains(label, tc.tag) {
+			t.Errorf("%s: label %q lacks %q", tc.name, label, tc.tag)
+		}
+		if tc.tag == "" && strings.Contains(label, "zone") {
+			t.Errorf("%s: label %q mentions the zone", tc.name, label)
+		}
+	}
+	// Danger tiers ignore the zone.
+	deadly := row(480, 600, 480, 610)
+	ms := 120.0
+	deadly.MoveCollisionMs = &ms
+	if pathTier(deadly) != "DEADLY" {
+		t.Error("zone rule must not touch DEADLY")
 	}
 }

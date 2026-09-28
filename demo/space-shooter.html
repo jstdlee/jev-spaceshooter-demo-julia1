@@ -417,7 +417,7 @@
         <div><canvas class="legend-sprite" data-sprite="missile_pickup" data-tint="M" width="36" height="36"></canvas><span><b>M missile pod</b>: +1 homing missile in flight (8 max)</span></div>
         <div><span class="magnet-icon" aria-hidden="true">(·)</span><span><b>Magnet</b> pulls nearby pickups in; no need to touch them</span></div>
       </div>
-      <p class="intro-text" style="font-size:18px;margin-top:10px">Clear every 5th wave for an extra life (5 max). In autopilot the threat level creeps up by itself (AUTO RAMP).</p>
+      <p class="intro-text" style="font-size:18px;margin-top:10px">Clear every 5th wave for an extra life (5 max). In autopilot the threat level steps up every 10 waves (AUTO RAMP).</p>
       <div class="intro-h guide-h">Manual controls</div>
       <div class="keys" id="intro-keys"></div>
       <div class="intro-buttons">
@@ -2772,11 +2772,11 @@
     }
 
     // ---- Demo auto-ramp: page pacing, not a core rule ----
-    // In autopilot only, every AUTO_RAMP.interval_ms of mission time the overall threat fraction rises by AUTO_RAMP.step
-    // (0 -> 1 in about 8 minutes) and each threat slider is set to that fraction of its range, never below where it
-    // already is. It goes through the same live path as a slider release: the slider UI, game.difficulty, and a
+    // In autopilot only, every AUTO_RAMP.every_waves waves flown on autopilot the overall threat fraction rises by
+    // AUTO_RAMP.step (0 -> 1 by about wave 100) and each threat slider is set to that fraction of its range, never below
+    // where it already is. It goes through the same live path as a slider release: the slider UI, game.difficulty, and a
     // difficulty_changed event (source auto_ramp) plus a checkpoint in the trace, so replays stay deterministic.
-    const AUTO_RAMP = Object.freeze({ interval_ms:20000, step:.04 });
+    const AUTO_RAMP = Object.freeze({ every_waves:10, step:.1 });
     const THREAT_SLIDERS = Object.freeze({
       bulletDensity:{ min:1, max:8, step:.25 },
       enemyDensity:{ min:1, max:6, step:.25 },
@@ -2785,7 +2785,7 @@
     });
     let autoRamp = true;
     let rampLevel = 0;
-    let rampClockMs = 0;
+    let rampWave = null; // wave the current 10-wave ramp window started at (null until the run's first tick)
     let baseDifficulty = { ...difficulty };
 
     // The overall level the sliders already stand at: the lowest fraction of range among them.
@@ -2818,12 +2818,16 @@
       return true;
     }
 
-    // Called with the mission time just simulated under the autopilot; manual flight and pause do not advance it.
-    function autoRampTick(elapsedMs) {
-      if (!autoRamp || !autopilot || introActive || paused || !runState || runState.ending || !game || game.terminal) return;
-      rampClockMs += elapsedMs;
-      while (rampClockMs >= AUTO_RAMP.interval_ms) {
-        rampClockMs -= AUTO_RAMP.interval_ms;
+    // Called after each simulated frame. Only waves flown on autopilot with the ramp on count: manual flight, pause or
+    // the ramp being off restart the 10-wave window at the current wave.
+    function autoRampTick() {
+      if (!game || !runState || runState.ending || game.terminal || introActive) return;
+      if (!autoRamp || !autopilot || paused || rampWave === null) {
+        rampWave = game.wave;
+        return;
+      }
+      while (game.wave - rampWave >= AUTO_RAMP.every_waves) {
+        rampWave += AUTO_RAMP.every_waves;
         applyAutoRampStep();
       }
     }
@@ -3213,7 +3217,7 @@
         accumulatorMs -= FIXED_DT_MS;
         steps += 1;
       }
-      if (autopilot && steps) autoRampTick(steps * FIXED_DT_MS);
+      if (steps) autoRampTick();
       if (steps >= MAX_CATCHUP_STEPS && accumulatorMs > MAX_LAG_MS) {
         invalidateQualification("catchup_lag");
         game.terminal = { reason:"timing_invalid", tick:game.tick, sim_ms:game.sim_ms, lives:game.player.lives, wave:game.wave, score:game.score };
@@ -3746,6 +3750,22 @@
       });
       trackBlasts(nowMs);
 
+      // Home zone: the central 3/4 of the arena (the bridge's zoneMin/Max constants). Safe moves that end outside it
+      // without heading back rank one tier lower, so the ship returns when it safely can. A faint dotted frame with
+      // corner brackets; it turns amber and blinks while the ship is outside.
+      {
+        const zone = { x0:lx(120), x1:lx(840), y0:lx(77.5), y1:lx(542.5) };
+        const out = game.player.x < 120 || game.player.x > 840 || game.player.y < 77.5 || game.player.y > 542.5;
+        const tone = out ? (blink ? "Y" : "O") : "D";
+        for (let x = zone.x0; x <= zone.x1; x += 6) { px(x, zone.y0, 1, 1, tone); px(x, zone.y1, 1, 1, tone); }
+        for (let y = zone.y0; y <= zone.y1; y += 6) { px(zone.x0, y, 1, 1, tone); px(zone.x1, y, 1, 1, tone); }
+        const bracket = out ? tone : "T";
+        for (const [cx, cy, sx, sy] of [[zone.x0, zone.y0, 1, 1], [zone.x1, zone.y0, -1, 1], [zone.x0, zone.y1, 1, -1], [zone.x1, zone.y1, -1, -1]]) {
+          px(Math.min(cx, cx + sx * 5), cy, 6, 1, bracket);
+          px(cx, Math.min(cy, cy + sy * 5), 1, 6, bracket);
+        }
+      }
+
       // Player gun: chunky bolts coloured by weapon level; escort-jet shots are smaller.
       // Rapid fire (level 3) is a thin cyan needle with a white tip; explosive shells (level 4+) are round
       // orange shells with a hot core and a red spark trail.
@@ -3921,7 +3941,7 @@
       // Each run starts from the user's own slider settings; the auto-ramp restarts from there.
       difficulty = { ...baseDifficulty };
       rampLevel = rampFractionOf(difficulty);
-      rampClockMs = 0;
+      rampWave = null;
       waveStarts.clear();
       game = core.createGame({ seed:20260920, difficulty });
       controller = djev.createController({ run_id:null, epoch:1 });
