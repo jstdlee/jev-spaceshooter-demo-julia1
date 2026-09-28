@@ -158,27 +158,32 @@ older engine); the setups differ, so the numbers aren't directly comparable.
 ## Game mechanics
 
 - **Pickups** float through the lower play area and fade over the last 2 s of a 14 s life: **B** bomb charge,
-  **W** weapon upgrade, **F** escort jet. A **magnet** pulls any pickup whose centre comes within 110 px of the
+  **W** weapon upgrade, **F** escort jet, **M** missile pod (+1 missile in flight each, up to +4). A **magnet** pulls any pickup whose centre comes within 110 px of the
   ship centre (starting at 180 px/s, ramping to 280 px/s), so it is collected without flying onto it. The move
   labels say `collects …` when the move brings the ship within that radius, or `toward …`, and the model decides
   whether to go.
 - **Weapon levels** (W pickups, up to level 5, cumulative): levels 0–2 fire 1-, 3- and 5-way spreads with missile
   salvos of 1, 2, 3; level 3 adds **rapid fire** (gun cooldown ×0.5); level 4 adds **explosive shells** (a gun
-  shot bursts on hit: every other ship whose hull is within 44 px takes 1 damage, the boss included but never
-  killed outright, and enemy bullets inside the radius are cleared); level 5 adds the **missile swarm** (8 fanned
-  missiles per salvo). The missile cap is 4, 5, 6, 6, 6, 8 by level, plus one per escort missile slot; a salvo
-  including escort missiles never exceeds 8.
+  shot bursts on hit: every other ship whose hull is within 70 px takes 2 damage, the boss included but never
+  killed by splash, and enemy bullets inside the radius are cleared); level 5 adds the **missile swarm** (8 fanned
+  missiles per salvo). The missile cap is 4, 5, 6, 6, 6, 8 by level, plus one per collected M pod and one per
+  escort missile slot, never above 8 missiles in flight; a salvo including escort missiles never exceeds 8.
 - **Homing missiles** launch automatically while the model's fire answer is `shoot`, steer toward a predicted
   intercept, and re-target when their target dies.
-- **Escort jets** (up to 8) ring the ship and fire every 0.17 s while the fire answer is `shoot`. Each shot leads
-  its target: first the enemy missile nearest the ship within 260 px of the ship, otherwise the nearest enemy ship
-  or missile anywhere in the arena; with no enemies it flies along the jet's outward facing. Their shots also destroy enemy bullets. A hit on the ship costs one jet; with no bombs left, a
-  detonate decision sacrifices a jet for the same blast.
+- **Escort jets** (up to 8) ring the ship and fire every 0.17 s (0.085 s with rapid fire, level 3+) while the fire
+  answer is `shoot`. Each shot flies along its jet's outward facing on the orbiting ring; escorts do not aim. Their
+  shots also destroy enemy bullets. A hit on the ship costs one jet; with no bombs left, a detonate decision
+  sacrifices a jet for the same blast.
 - **Bombs** start at 3 charges (max 6). A detonation destroys every enemy bullet and ship within 200 px; the boss
   takes 20 damage instead. The model decides when, from ranked hold/detonate labels.
 - **Boss**: 40–60 s into a run, then 35–55 s after each boss dies, a 45-HP boss fires rotating rings, aimed fans
   and homing missiles.
-- **Extra lives** every tenth wave, up to 5. Wave changes clear nothing.
+- **Extra lives** for clearing every fifth wave (waves 6, 11, 16, … start with one), up to 5. Wave changes clear
+  nothing. Each new wave shows a short briefing over the arena (visual only; the simulation keeps running).
+- **Auto ramp** (page demo pacing, autopilot only, on by default; `?autoramp=0` or the **Auto ramp** button turns it
+  off): every 20 s of autopilot mission time the four threat sliders rise by 4 % of their ranges (never below where
+  you set them), about 8 minutes to the maximum. Each step is recorded as `difficulty_changed`
+  (`source: "auto_ramp"`) plus a checkpoint, and makes the run not benchmark-qualified.
 
 ## Controls
 

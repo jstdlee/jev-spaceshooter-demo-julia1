@@ -215,7 +215,8 @@ function loadBrowserAdapter(modules, game, controller, options = {}) {
       currentObservation, updateRecentFromEvents, updatePanel, setPaused,
       restartRun, maybeBeginDecision, endRun, processTick, enqueueEvents, drainTrace,
       showIntro, startFromIntro, onKeyDown, onKeyUp, updateManual, update, setAutopilot, weaponText,
-      getState: () => ({ game, controller, runId, qualification, lastApi,
+      autoRampTick, applyAutoRampStep, setAutoRamp, readDifficultyControls, waveBriefing, briefingLines, wavesToExtraLife, THREAT_SLIDERS, AUTO_RAMP,
+      getState: () => ({ game, controller, runId, qualification, lastApi, difficulty, rampLevel, autoRamp,
         completionEvents, history, nextRequestAllowedWallMs, introActive, autopilot, runState, manualBombRequests }),
     };
   })();`), sandbox);
@@ -378,6 +379,82 @@ test('the HUD weapon text names each upgrade', () => {
   assert.equal(adapter.weaponText(3), 'Lv 3 · 5-way · rapid · 3×salvo · 6 max');
   assert.equal(adapter.weaponText(4), 'Lv 4 · 5-way · rapid · splash · 3×salvo · 6 max');
   assert.equal(adapter.weaponText(5), 'Lv 5 · 5-way · rapid · splash · 8×salvo · 8 max');
+});
+
+test('demo auto-ramp raises every threat slider through the live difficulty path, only in autopilot', async (t) => {
+  const bridge = browserTransport();
+  const { adapter, element } = loadBrowserAdapter(loadModules(), null, null, { fetch: bridge.fetch, clock: { now: 0 }, t });
+  await adapter.restartRun();
+  bridge.accept(bridge.decisions()[0]);
+  await waitUntil(() => !adapter.getState().controller.pending);
+  const { game } = adapter.getState();
+  assert.equal(adapter.getState().autoRamp, true, 'on by default');
+  assert.equal(adapter.getState().rampLevel, 0);
+  const runId = adapter.getState().runState.id;
+
+  adapter.autoRampTick(19999);
+  assert.equal(game.difficulty.bulletDensity, 1, 'nothing before 20 s');
+  adapter.autoRampTick(1);
+  assert.equal(adapter.getState().rampLevel, 0.04);
+  // 4% of 1..8 is 1.28, snapped to the 0.25 slider step; the fast speed stays at its higher default.
+  assert.equal(game.difficulty.bulletDensity, 1.25);
+  assert.equal(game.difficulty.fastBulletSpeed, 1.6, 'never lowered below where the slider was');
+  assert.equal(element('bullet-density').value, 1.25, 'the slider UI follows');
+  assert.equal(element('bullet-density-value').textContent, '1.25x');
+  assert.ok(adapter.getState().history.some((row) => row.kind === 'threat' && /^THREAT UP/.test(row.text)));
+  assert.equal(adapter.getState().qualification.valid, false, 'a ramped run is not benchmark-qualified');
+  await adapter.drainTrace();
+  const changes = bridge.events(runId).filter((e) => e.type === 'difficulty_changed');
+  assert.equal(changes.length, 1, 'one event per step');
+  assert.equal(changes[0].payload.source, 'auto_ramp');
+  assert.deepEqual(changes[0].payload.difficulty, plain(game.difficulty));
+  const checkpoints = bridge.events(runId).filter((e) => e.type === 'checkpoint' && e.tick === changes[0].tick);
+  assert.ok(checkpoints.length >= 1, 'with a checkpoint');
+
+  // A manual slider move sticks and the ramp continues from the new values (never lowering what the user set).
+  element('bullet-density').value = '6';
+  element('enemy-density').value = '1';
+  element('fast-bullet-ratio').value = '0';
+  element('fast-bullet-speed').value = '1.6';
+  adapter.readDifficultyControls({ type: 'change' });
+  assert.equal(game.difficulty.bulletDensity, 6);
+  adapter.autoRampTick(20000);
+  assert.equal(game.difficulty.bulletDensity, 6, 'the user setting is kept');
+  assert.equal(game.difficulty.enemyDensity, 1.25, 'the others ramp from their values');
+
+  // Manual flight pauses the ramp; turning it off stops it.
+  adapter.setAutopilot(false);
+  adapter.autoRampTick(60000);
+  assert.equal(game.difficulty.enemyDensity, 1.25, 'paused in manual mode');
+  adapter.setAutopilot(true);
+  adapter.setAutoRamp(false);
+  adapter.autoRampTick(60000);
+  assert.equal(game.difficulty.enemyDensity, 1.25, 'off');
+  adapter.setAutoRamp(true);
+
+  // From zero, 25 steps (about 8 minutes) reach the top of every range.
+  for (let i = 0; i < 30; i += 1) adapter.applyAutoRampStep();
+  assert.equal(adapter.getState().rampLevel, 1);
+  assert.deepEqual(plain(game.difficulty), { bulletDensity: 8, enemyDensity: 6, fastBulletRatio: 1, fastBulletSpeed: 4.8 });
+  assert.ok(adapter.AUTO_RAMP.interval_ms / adapter.AUTO_RAMP.step / 60000 <= 8.4);
+  await adapter.endRun('aborted');
+});
+
+test('the wave briefing uses real values and wraps into prompt lines', () => {
+  const { core } = loadModules();
+  const { adapter } = loadBrowserAdapter(loadModules(), null, null);
+  const game = core.createGame({ seed: 1, difficulty: { bulletDensity: 3, enemyDensity: 1.2, fastBulletRatio: 0, fastBulletSpeed: 1.6 } });
+  game.wave = 5;
+  assert.deepEqual([...adapter.waveBriefing(game, 14)], ['SECTOR 05', 'HOSTILES 14', 'THREAT 2.1x', 'EXTRA LIFE IN 1 WAVE']);
+  game.wave = 1;
+  assert.equal(adapter.waveBriefing(game, 7)[3], 'EXTRA LIFE IN 5 WAVES');
+  game.wave = 6;
+  assert.equal(adapter.wavesToExtraLife(6), 5);
+  game.player.lives = 5;
+  assert.equal(adapter.waveBriefing(game, 7)[3], 'LIVES MAX');
+  const lines = adapter.briefingLines(['SECTOR 05', 'HOSTILES 14', 'THREAT 2.1x', 'EXTRA LIFE IN 1 WAVE'], (text) => text.length <= 30);
+  assert.deepEqual([...lines], ['> SECTOR 05 // HOSTILES 14', '> THREAT 2.1x', '> EXTRA LIFE IN 1 WAVE']);
+  assert.deepEqual([...adapter.briefingLines(['A', 'B'], () => true)], ['> A // B']);
 });
 
 test('run integrity shows recording only after the start acknowledgement', async (t) => {
@@ -1127,18 +1204,22 @@ test('a bomb clears threats within its radius once per decision and consumes one
   assert.equal(game.counters.jetSacrifices, 1);
 });
 
-test('clearing every tenth wave grants one extra life, up to five', () => {
+test('clearing every fifth wave grants one extra life, up to five', () => {
   const { core } = loadModules();
+  assert.equal(core.EXTRA_LIFE.every_waves, 5);
   const game = cleanForecastGame(core, { x: 480, y: 550 });
   const clearWave = (wave) => { game.wave = wave; game.waveActive = true; game.enemies = []; return core.stepGame(game, null).events; };
   assert.equal(game.player.lives, 3);
-  assert.ok(!clearWave(5).some((e) => e.type === 'extra_life'));
-  assert.ok(clearWave(10).some((e) => e.type === 'extra_life' && e.lives === 4));
-  assert.equal(game.wave, 11);
-  clearWave(20);
+  for (const wave of [1, 2, 3, 4, 6, 9]) assert.ok(!clearWave(wave).some((e) => e.type === 'extra_life'), `no life for clearing wave ${wave}`);
+  const bonus = clearWave(5).find((e) => e.type === 'extra_life');
+  assert.ok(bonus && bonus.lives === 4 && bonus.wave === 6, 'wave 6 starts with the bonus');
+  assert.equal(game.wave, 6);
+  clearWave(10);
   assert.equal(game.player.lives, 5);
-  clearWave(30);
+  assert.equal(game.wave, 11);
+  assert.ok(!clearWave(15).some((e) => e.type === 'extra_life'), 'no bonus at the cap');
   assert.equal(game.player.lives, 5, 'lives cap at five');
+  assert.equal(game.counters.extraLives, 2);
 });
 
 test('a new wave keeps bullets in flight instead of clearing them', () => {
@@ -1286,39 +1367,29 @@ test('forecast collect facts follow the magnet radius', () => {
   assert.ok(Object.values(byId()).every((m) => m.pickup_collect === null), 'a pickup about to expire is not promised');
 });
 
-test('escort shots lead the nearest enemy within range, and keep their facing with none in range', () => {
+test('escort shots fly along each jet\'s outward facing even with an enemy off-axis, and never on cease', () => {
   const { core } = loadModules();
   const game = quietGame(core, { x: 480, y: 500 });
-  game.wingmen = 1; // slot 0 faces left (180 deg)
+  game.wingmen = 2; // slot 0 faces left (180 deg), slot 1 right (0 deg)
   game.wingPhase = 0;
-  const shoot = { movement: 'hold', fire: 'shoot', decision_id: 'esc', sequence: 1, source: 'djev' };
-  const escortShot = () => game.playerBullets.find((s) => s.wingman === 0 && s.id === game.playerBullets.filter((b) => b.wingman === 0).at(-1).id);
-
-  core.stepGame(game, shoot);
-  let shot = escortShot();
-  assert.ok(shot.vx < 0 && Math.abs(shot.vy) < 1e-6, 'no target: fires along its facing');
-
-  // An enemy far off the jet's axis: up and to the right, within 380 px.
-  game.playerBullets = [];
-  game.wingClock_s = 0;
-  game.player.cooldown_s = 0;
-  game.enemies = [{ ...scoutEnemy({ id: 'off-axis', x: 600, y: 250 }), vx: 35, hp: 999, maxHp: 999 }];
   game.missileClock_s = 99; // keep homing missiles out of this check
+  game.enemies = [{ ...scoutEnemy({ id: 'off-axis', x: 600, y: 250 }), vx: 35, hp: 999, maxHp: 999 }];
+  game.enemyMissiles = [{ id: 'incoming', x: 560, y: 440, heading: Math.PI * 0.8, age_s: 0 }];
+  const shoot = { movement: 'hold', fire: 'shoot', decision_id: 'esc', sequence: 1, source: 'djev' };
   core.stepGame(game, shoot);
-  shot = escortShot();
-  assert.equal(shot.aim_id, 'off-axis');
-  const wing = { x: shot.x - shot.vx / 60, y: shot.y - shot.vy / 60 };
-  const enemy = game.enemies[0];
-  const toEnemy = Math.atan2(enemy.y - wing.y, enemy.x - wing.x);
-  const heading = Math.atan2(shot.vy, shot.vx);
-  assert.ok(Math.abs(heading - toEnemy) < .35, 'heads toward the enemy');
-  assert.ok(heading > toEnemy - 1e-9, 'leads the target in its direction of motion (clockwise, since it drifts right and down)');
-  assert.ok(Math.abs(Math.hypot(shot.vx, shot.vy) - core.WINGMAN.shot_speed) < 1e-6);
-
-  // Fly the shot forward: it meets the moving enemy.
-  let hit = false;
-  for (let tick = 0; tick < 60 && !hit; tick += 1) hit = core.stepGame(game, { ...shoot, fire: 'cease' }).events.some((e) => e.type === 'enemy_damaged' && e.shot_id === shot.id);
-  assert.ok(hit, 'the led shot hits');
+  const phase = game.wingPhase - core.WINGMAN.orbit_rad_s / 60; // the ring angle when the jets fired
+  for (const slot of [0, 1]) {
+    const shot = game.playerBullets.find((b) => b.wingman === slot);
+    assert.ok(shot, `escort ${slot} fired`);
+    assert.equal(shot.aim_id, undefined, 'escorts do not pick targets');
+    const facing = core.WINGMAN.slot_angles_deg[slot] * Math.PI / 180 + phase;
+    const heading = Math.atan2(shot.vy, shot.vx);
+    assert.ok(Math.abs(Math.atan2(Math.sin(heading - facing), Math.cos(heading - facing))) < 1e-9, `escort ${slot} fires along its facing`);
+    assert.ok(Math.abs(Math.hypot(shot.vx, shot.vy) - core.WINGMAN.shot_speed) < 1e-6);
+  }
+  // Slot 0 faces left, away from the enemy up and to the right.
+  assert.ok(game.playerBullets.find((b) => b.wingman === 0).vx < 0);
+  assert.ok(!('aim_range_px' in core.WINGMAN) && !('defend_range_px' in core.WINGMAN));
 
   // Escorts never fire on cease.
   game.playerBullets = [];
@@ -1327,28 +1398,33 @@ test('escort shots lead the nearest enemy within range, and keep their facing wi
   assert.equal(game.playerBullets.length, 0);
 });
 
-test('escorts aim across the whole arena and defend the ship from nearby missiles first', () => {
+test('rapid fire halves the escort fire interval from level 3', () => {
   const { core } = loadModules();
-  const game = quietGame(core, { x: 480, y: 540 });
-  game.wingmen = 1;
-  game.wingPhase = 0;
-  game.missileClock_s = 99;
-  const shoot = { movement: 'hold', fire: 'shoot', decision_id: 'esc2', sequence: 1, source: 'djev' };
-  const lastEscortShot = () => game.playerBullets.filter((b) => b.wingman === 0).at(-1);
-
-  // A formation enemy near the top, far outside the old 380 px range, is still aimed at.
-  game.enemies = [{ ...scoutEnemy({ id: 'top', x: 700, y: 70 }), hp: 999, maxHp: 999 }];
-  core.stepGame(game, shoot);
-  assert.equal(lastEscortShot().aim_id, 'top');
-  assert.ok(lastEscortShot().vy < 0, 'fires upward toward the formation');
-
-  // An enemy missile closing on the ship wins over a nearer enemy ship.
-  game.playerBullets = [];
-  game.wingClock_s = 0;
-  game.enemies = [{ ...scoutEnemy({ id: 'near-ship', x: 430, y: 470 }), hp: 999, maxHp: 999 }];
-  game.enemyMissiles = [{ id: 'incoming', x: 640, y: 420, heading: Math.PI * 0.8, age_s: 0 }];
-  core.stepGame(game, shoot);
-  assert.equal(lastEscortShot().aim_id, 'incoming');
+  const shoot = { movement: 'hold', fire: 'shoot', decision_id: 'esc-rapid', sequence: 1, source: 'djev' };
+  const intervalAt = (level) => {
+    const game = quietGame(core, { x: 480, y: 500 });
+    game.wingmen = 1;
+    game.weaponLevel = level;
+    core.stepGame(game, shoot);
+    return game.wingClock_s;
+  };
+  assert.ok(Math.abs(intervalAt(2) - core.WINGMAN.fire_interval_s) < 1e-9);
+  assert.ok(Math.abs(intervalAt(3) - core.WINGMAN.fire_interval_s * core.WEAPON.rapid_cooldown_scale) < 1e-9);
+  assert.ok(Math.abs(intervalAt(5) - core.WINGMAN.fire_interval_s * core.WEAPON.rapid_cooldown_scale) < 1e-9);
+  const escortShotsIn = (level) => {
+    const game = quietGame(core, { x: 480, y: 500 });
+    game.wingmen = 1;
+    game.weaponLevel = level;
+    game.missileClock_s = 999;
+    let n = 0;
+    for (let tick = 0; tick < 120; tick += 1) {
+      const before = new Set(game.playerBullets.map((b) => b.id));
+      core.stepGame(game, shoot);
+      n += game.playerBullets.filter((b) => b.wingman === 0 && !before.has(b.id)).length;
+    }
+    return n;
+  };
+  assert.ok(escortShotsIn(3) >= escortShotsIn(2) * 1.6, 'about twice the escort shots per second');
 });
 
 test('rapid fire halves the gun cooldown from level 3', () => {
@@ -1419,6 +1495,125 @@ test('explosive shells at level 4 splash nearby enemies and bullets; the boss on
   assert.ok(bossSplash);
   const boss = bossGame.enemies.find((e) => e.id === 'boss-x');
   assert.ok(boss && boss.hp === 3 - core.WEAPON.splash_damage, 'the boss takes splash damage, not instant death');
+});
+
+test('splash at level 4 damages every enemy ship around the hit point by 2 within 70 px', () => {
+  const { core } = loadModules();
+  assert.equal(core.WEAPON.splash_radius_px, 70);
+  assert.equal(core.WEAPON.splash_damage, 2);
+  const game = quietGame(core, { x: 480, y: 580 });
+  // Three ships around the struck scout, each hull 45-55 px from the burst (outside the old 44 px radius).
+  game.enemies = [
+    { ...scoutEnemy({ id: 'struck', x: 480, y: 470 }), phase: 0 },
+    { ...scoutEnemy({ id: 'left', x: 415, y: 480 }), phase: 0 },
+    { id: 'right', type: 'tank', x: 555, y: 470, w: 48, h: 34, hp: 4, maxHp: 4, vx: 0, phase: 0 },
+    { id: 'above', type: 'swarm', x: 480, y: 420, w: 23, h: 19, hp: 1, maxHp: 1, vx: 0, phase: 0 },
+    { ...scoutEnemy({ id: 'far', x: 640, y: 470 }), phase: 0 },
+  ];
+  game.playerBullets = [{ id: 'shell', x: 480, y: 520, vx: 0, vy: -580, radius: 3, level: 4, explosive: true, authorizedBy: null }];
+  let splash = null;
+  for (let tick = 0; tick < 20 && !splash; tick += 1) splash = core.stepGame(game, null).events.find((e) => e.type === 'splash');
+  assert.ok(splash, 'the shell burst on hit');
+  assert.equal(splash.radius_px, 70);
+  assert.deepEqual([...splash.damaged_enemy_ids].sort(), ['above', 'left', 'right']);
+  assert.deepEqual([...splash.destroyed_enemy_ids].sort(), ['above', 'left'], 'a 2 hp scout and a swarm ship die');
+  assert.equal(game.enemies.find((e) => e.id === 'right').hp, 2, 'the tank loses 2 hp');
+  assert.equal(game.enemies.find((e) => e.id === 'struck').hp, 1, 'the struck ship takes only the shell hit');
+  assert.equal(game.enemies.find((e) => e.id === 'far').hp, 2, 'outside the radius is untouched');
+  assert.equal(game.counters.splashDamaged, 3);
+
+  // The boss takes splash damage but is never killed by it.
+  for (const hp of [5, 2, 1]) {
+    const bossGame = quietGame(core, { x: 480, y: 580 });
+    bossGame.enemies = [{ ...scoutEnemy({ id: 'struck', x: 480, y: 470 }), phase: 0 }, { id: 'boss-x', type: 'boss', x: 480, y: 400, w: 96, h: 58, hp, maxHp: 45, vx: 0, phase: 0 }];
+    bossGame.playerBullets = [{ id: 'shell', x: 480, y: 520, vx: 0, vy: -580, radius: 3, level: 4, explosive: true, authorizedBy: null }];
+    let burst = null;
+    for (let tick = 0; tick < 20 && !burst; tick += 1) burst = core.stepGame(bossGame, null).events.find((e) => e.type === 'splash');
+    assert.ok(burst && burst.damaged_enemy_ids.includes('boss-x'));
+    const boss = bossGame.enemies.find((e) => e.id === 'boss-x');
+    assert.ok(boss, `a boss at ${hp} hp survives the splash`);
+    assert.equal(boss.hp, Math.max(1, Math.min(hp, hp - 2)));
+  }
+});
+
+test('M missile pickups add +1 missile capacity each, up to 8 in flight including escort slots', () => {
+  const { core } = loadModules();
+  assert.ok(core.PICKUP_KINDS.includes('missile'));
+  const game = quietGame(core, { x: 480, y: 400 });
+  const pod = (id) => ({ id, kind: 'missile', x: 480, y: 400, vx: 0, vy: 0, age_s: 0, hue: 0 });
+  assert.equal(core.missileCap(game), 4);
+  game.pickups = [pod('m1')];
+  const collected = core.stepGame(game, null).events.find((e) => e.type === 'pickup_collected');
+  assert.deepEqual([collected.kind, collected.before, collected.after], ['missile', 4, 5]);
+  assert.equal(game.missileBonus, 1);
+  assert.equal(core.missileCap(game), 5);
+  assert.equal(game.counters.missilePickups, 1);
+
+  // Launches respect the raised cap.
+  const shoot = { movement: 'hold', fire: 'shoot', decision_id: 'm', sequence: 1, source: 'djev' };
+  game.enemies = [{ ...scoutEnemy({ id: 'sponge', x: 480, y: 60 }), hp: 999, maxHp: 999 }];
+  const flying = (n) => Array.from({ length: n }, (_, i) => ({ id: `f${i}`, x: 10, y: 600, heading: 0, age_s: 0, target_id: 'sponge', decision_id: 'd' }));
+  const launchesWith = (active) => {
+    game.playerMissiles = flying(active);
+    game.missileClock_s = 0;
+    return core.stepGame(game, shoot).events.filter((e) => e.type === 'missile_launch').length;
+  };
+  assert.equal(launchesWith(4), 1, 'a fifth missile with one M');
+  assert.equal(launchesWith(5), 0);
+
+  for (let i = 2; i <= 6; i += 1) { game.pickups = [pod(`m${i}`)]; core.stepGame(game, null); }
+  assert.equal(game.missileBonus, core.MISSILE.pickup_bonus_max, 'the bonus stops at +4');
+  assert.equal(core.missileCap(game), 8);
+  game.weaponLevel = 5;
+  game.wingmen = 2;
+  assert.equal(core.missileCap(game), 8, 'never above 8 in total');
+  game.weaponLevel = 2;
+  game.missileBonus = 1;
+  game.wingmen = 1;
+  assert.equal(core.missileCap(game), 8, 'level cap 6 + 1 M + 1 escort slot');
+  game.wingmen = 0;
+  assert.equal(core.missileCap(game), 7);
+
+  // The bonus is part of the serialized state and the hash.
+  const a = core.serializeGame(game);
+  assert.equal(a.missileBonus, 1);
+  const before = core.hashGame(game);
+  game.missileBonus = 2;
+  assert.notEqual(core.hashGame(game), before);
+  assert.equal(core.restoreGame(core.serializeGame(game)).missileBonus, 2);
+});
+
+test('M pickups spawn on their own seeded clock and the forecast treats them as a power-up goal', () => {
+  const { core } = loadModules();
+  const spawns = (seed) => {
+    const game = core.createGame({ seed });
+    game.player.invincible_s = 1e6; // survive the untouched run long enough to see two pods
+    const out = [];
+    for (let tick = 0; tick < 60 * 30; tick += 1) {
+      for (const e of core.stepGame(game, null).events) if (e.type === 'pickup_spawned' && e.kind === 'missile') out.push([e.tick, Math.round(e.x), Math.round(e.y)]);
+      if (game.terminal) break;
+    }
+    return out;
+  };
+  const first = spawns(7);
+  assert.ok(first.length >= 2, 'two M pods in 30 s');
+  assert.ok(Math.abs(first[0][0] / 60 - core.PICKUP.first_spawn_s.missile) < .05, 'the first at 12 s');
+  assert.ok(Math.abs((first[1][0] - first[0][0]) / 60 - core.PICKUP.spawn_interval_s.missile) < .05, 'then every 15 s');
+  assert.deepEqual(spawns(7), first, 'deterministic for a seed');
+
+  const game = quietGame(core, { x: 480, y: 400 });
+  game.pickups = [{ id: 'p', kind: 'missile', x: 640, y: 400, vx: 0, vy: 0, age_s: 0, hue: 0 }];
+  const byId = () => Object.fromEntries(core.observeGame(game, { expected_delay_ms: 0 }).forecast.candidates.map((c) => [c.id, c.medium]));
+  assert.equal(byId().right.pickup_collect, 'missile');
+  game.pickups[0].x = 800;
+  assert.equal(byId().right.pickup_toward, 'missile');
+  // A missile pod is chased ahead of a bomb pickup.
+  game.pickups.push({ id: 'b', kind: 'bomb', x: 160, y: 400, vx: 0, vy: 0, age_s: 0, hue: 0 });
+  assert.equal(byId().left.pickup_toward, null, 'the bomb is not the goal while a power-up is wanted');
+  // At the full cap the pod is unwanted.
+  game.missileBonus = core.MISSILE.pickup_bonus_max;
+  assert.equal(byId().right.pickup_toward, null);
+  assert.equal(byId().left.pickup_toward, 'bomb');
 });
 
 test('a level 5 salvo launches 8 fanned missiles in parallel, and escorts keep their slots within the cap', () => {

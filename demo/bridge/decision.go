@@ -23,7 +23,7 @@ var (
 	FireIDs     = []string{"shoot", "cease"}
 	IntentIDs   = []string{"evade", "recover", "position"}
 	BombIDs     = []string{"hold", "detonate"}
-	PickupKinds = []string{"bomb", "weapon", "wingman"}
+	PickupKinds = []string{"bomb", "weapon", "wingman", "missile"}
 	PathIDs     = func() []string {
 		ids := make([]string, len(ActionIDs))
 		for i, movement := range ActionIDs {
@@ -413,8 +413,8 @@ func pathTier(row PathRow) string {
 	// drop one. With only the collect bonus Djev gathered 24 of 96 pickups and survived 3/6
 	// lockstep runs; with pursuit, 41 of 101 and 5/6.
 	switch {
-	case row.PickupCollect == "weapon" || row.PickupCollect == "wingman":
-		// Upgrading firepower is the proactive goal: a weapon block lifts a safe move two tiers.
+	case isPowerUp(row.PickupCollect):
+		// Upgrading firepower is the proactive goal: a weapon, escort-jet, or missile block lifts a safe move two tiers.
 		tier = shiftTier(tier, -2)
 	case row.PickupCollect != "":
 		tier = shiftTier(tier, -1)
@@ -422,6 +422,11 @@ func pathTier(row PathRow) string {
 		tier = shiftTier(tier, 1)
 	}
 	return tier
+}
+
+// isPowerUp reports whether a pickup kind upgrades firepower (everything but a bomb charge).
+func isPowerUp(kind string) bool {
+	return kind == "weapon" || kind == "wingman" || kind == "missile"
 }
 
 // shiftTier moves among the safe tiers only: GOOD, OK, RISKY.
@@ -468,7 +473,7 @@ func pathLabel(row PathRow) string {
 	if row.WallRoom < nearWallRoomPx {
 		parts = append(parts, "near wall")
 	}
-	if row.PickupCollect == "weapon" || row.PickupCollect == "wingman" {
+	if isPowerUp(row.PickupCollect) {
 		parts = append(parts, "collects "+row.PickupCollect+" (power up)")
 	} else if row.PickupCollect != "" {
 		parts = append(parts, "collects "+row.PickupCollect)

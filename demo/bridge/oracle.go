@@ -45,7 +45,7 @@ func oracleScore(label string) (tier int, score float64) {
 	}
 	if strings.Contains(label, "collects ") {
 		score += 50
-	} else if strings.Contains(label, "toward bomb") || strings.Contains(label, "toward weapon") {
+	} else if strings.Contains(label, "toward bomb") || strings.Contains(label, "toward weapon") || strings.Contains(label, "toward missile") {
 		score += 5
 	}
 	if strings.Contains(label, "toward center") {

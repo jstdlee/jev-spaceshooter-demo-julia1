@@ -446,6 +446,26 @@ func TestPickupLabelsAndRanks(t *testing.T) {
 	expectAPIError(t, err, 400)
 }
 
+func TestMissilePickupLabelsAndOracle(t *testing.T) {
+	body := decisionBody(t, "missile-pickup")
+	medium(body, 6)["pickup_collect"] = "missile"
+	medium(body, 6)["escape_clearance_px"] = json.Number("14.9")
+	medium(body, 5)["pickup_toward"] = "missile"
+	criteria, _, err := buildPathCriteria(requestFor(t, body))
+	must(t, err)
+	if got := criteria.Get("up_right__medium"); got != "Tier 1 GOOD: 6/9 escapes, grazing gap, near enemy, collects missile (power up), busy space, keeps course." {
+		t.Fatalf("missile pod lifts two tiers like a weapon block: %q", got)
+	}
+	if got, _ := criteria.Get("up_left__medium").(string); !strings.Contains(got, "toward missile") {
+		t.Fatalf("toward: %q", got)
+	}
+	_, towardMissile := oracleScore("Tier 2 OK: 6/9 escapes, open gap, toward missile, open space.")
+	_, plain := oracleScore("Tier 2 OK: 6/9 escapes, open gap, open space.")
+	if towardMissile <= plain {
+		t.Fatalf("the oracle prefers heading toward a missile pod: %v vs %v", towardMissile, plain)
+	}
+}
+
 func TestMotionRelativeToExecutingCommand(t *testing.T) {
 	want := map[string]string{"hold": "stationary", "right": "turns", "up": "continues", "down": "reverses",
 		"up_left": "continues", "up_right": "continues", "down_left": "reverses", "down_right": "reverses"}

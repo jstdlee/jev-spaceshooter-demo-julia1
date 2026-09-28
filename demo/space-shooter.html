@@ -110,6 +110,8 @@
     button:hover { background:var(--w); }
     button:active { box-shadow:inset 2px 2px 0 rgba(0,0,0,.4), 0 0 0 2px var(--k); }
     button:focus-visible { outline:2px solid var(--y); outline-offset:2px; }
+    #auto-ramp-button { margin-left:auto; background:var(--k); color:var(--m); min-height:0; padding:3px 5px; font-size:7px; flex:none; box-shadow:none; }
+    #auto-ramp-button[aria-pressed="false"] { color:var(--g); }
     #autopilot-button { background:var(--l); } #pause-button { background:var(--y); } #restart-button { background:var(--r); color:var(--w); }
     .controls .sub { font-size:15px; line-height:.9; max-height:none; }
 
@@ -333,10 +335,10 @@
             <div><span class="label">Wave</span><span class="value" id="hud-wave">1</span></div>
             <div><span class="label">Mission time</span><span class="value" id="hud-elapsed">0.0 s</span></div>
             <div><span class="label">Mode</span><span class="value" id="hud-mode">AUTO</span></div>
-            <div><span class="label">Missiles</span><span class="value" id="hud-missiles">0 · 0 kills</span></div>
+            <div><span class="label">Missiles</span><span class="value" id="hud-missiles">0/4 · 0 kills</span></div>
             <div><span class="label">Run</span><span class="value" id="hud-run">starting</span></div>
             <div class="wide"><span class="label">Weapon</span><span class="value" id="hud-weapon">Lv 0</span></div>
-            <div class="wide"><span class="label">Supply · escort</span><span class="value" id="hud-pickups">0 bomb · 0 weapon</span></div>
+            <div class="wide"><span class="label">Supply · escort</span><span class="value" id="hud-pickups">0 bomb · 0 weapon · 0 M</span></div>
           </div>
         </div>
         <div class="controls">
@@ -346,7 +348,7 @@
           <button id="guide-button" aria-haspopup="dialog">? Controls</button>
           <button id="provider-button" aria-haspopup="dialog" title="Choose the decision API (provider, model, API key)">⚙ API: default</button>
           <span id="http-warning" class="http-warning">This page is open as a local file, so djev and trace HTTP endpoints are unreachable. Serve it from the bridge URL for model-controlled evidence; local file play remains neutral hold plus cease.</span>
-          <span class="sub">Manual input, pause, reset, difficulty changes, or lag invalidate benchmark qualification for the active run.</span>
+          <span class="sub">Manual input, pause, reset, difficulty changes (including auto ramp), or lag invalidate benchmark qualification for the active run.</span>
         </div>
       </div>
       <div class="pod pod-nav">
@@ -370,7 +372,7 @@
           </div>
         </div>
         <div class="section threat" id="decision-panel">
-          <h2>Threat level</h2>
+          <h2>Threat level <button type="button" id="auto-ramp-button" aria-pressed="true" title="In autopilot, raise all threat sliders a little every 20 s of mission time (about 8 minutes to max)">Auto ramp: ON</button></h2>
           <div class="tuning-grid">
             <label class="slider-row"><span>Bullet density</span><input id="bullet-density" type="range" min="1" max="8" step="0.25" value="1" /><b id="bullet-density-value">1.00x</b></label>
             <label class="slider-row"><span>Enemy density</span><input id="enemy-density" type="range" min="1" max="6" step="0.25" value="1" /><b id="enemy-density-value">1.00x</b></label>
@@ -411,9 +413,11 @@
       <div class="legend">
         <div><canvas class="legend-sprite" data-sprite="weapon" data-tint="Y" width="36" height="36"></canvas><span><b>W weapon</b> upgrades: spread → rapid → splash → 8-missile swarm</span></div>
         <div><canvas class="legend-sprite" data-sprite="bomb" data-tint="O" width="36" height="36"></canvas><span><b>B bomb</b> charge: clears bullets and ships nearby</span></div>
-        <div><canvas class="legend-sprite" data-sprite="wingman_pickup" data-tint="W" width="36" height="36"></canvas><span><b>F escort jet</b>: orbits the ship and auto-aims its shots</span></div>
+        <div><canvas class="legend-sprite" data-sprite="wingman_pickup" data-tint="W" width="36" height="36"></canvas><span><b>F escort jet</b>: orbits the ship and fires outward from its ring</span></div>
+        <div><canvas class="legend-sprite" data-sprite="missile_pickup" data-tint="M" width="36" height="36"></canvas><span><b>M missile pod</b>: +1 homing missile in flight (8 max)</span></div>
         <div><span class="magnet-icon" aria-hidden="true">(·)</span><span><b>Magnet</b> pulls nearby pickups in; no need to touch them</span></div>
       </div>
+      <p class="intro-text" style="font-size:18px;margin-top:10px">Clear every 5th wave for an extra life (5 max). In autopilot the threat level creeps up by itself (AUTO RAMP).</p>
       <div class="intro-h guide-h">Manual controls</div>
       <div class="keys" id="intro-keys"></div>
       <div class="intro-buttons">
@@ -431,7 +435,7 @@
       <h2 id="guide-title" class="intro-title" style="font-size:18px">Controls</h2>
       <div class="keys" id="guide-keys"></div>
       <div class="intro-h">Pickups</div>
-      <p class="intro-text" style="font-size:18px">W weapon: spread → rapid → splash → 8-missile swarm · B bomb charge · F escort jet · the magnet pulls nearby pickups in.</p>
+      <p class="intro-text" style="font-size:18px">W weapon: spread → rapid → splash → 8-missile swarm · B bomb charge · F escort jet · M missile pod (+1 missile in flight, 8 max) · the magnet pulls nearby pickups in. Every 5th wave cleared adds a life (5 max).</p>
       <div class="overlay-foot">Manual input, pause, and restart mark the run as not benchmark-qualified.</div>
     </div>
   </div>
@@ -469,7 +473,7 @@
   (() => {
     "use strict";
 
-    const ENGINE_VERSION = "space-decision-core-v11";
+    const ENGINE_VERSION = "space-decision-core-v12";
     const DT_MS = 1000 / 60;
     const DT_SECONDS = 1 / 60;
     const WIDTH = 960;
@@ -499,44 +503,48 @@
     const HARDEST_DIFFICULTY = Object.freeze({ bulletDensity:4, enemyDensity:3, fastBulletRatio:.85, fastBulletSpeed:2.4 });
     const PRNG_VERSION = "xorshift32-v1";
     // Homing missiles launch automatically while a Djev command authorizes the gun.
-    // Missile cap grows with weapon level (max_active + WEAPON.missile_cap_bonus_by_level): 4 at level 0,
-    // 6 at levels 2-4, and max_active_top = 8 with the level 5 missile swarm.
-    const MISSILE = Object.freeze({ speed:420, turn_rate:6, damage:1, lifetime_s:2.5, launch_interval_s:.5, max_active:4, max_active_top:8, box:{ w:8, h:14 } });
+    // Missile cap grows with weapon level (max_active + WEAPON.missile_cap_bonus_by_level): 4, 5, 6, 6, 6, 8 at levels 0-5.
+    // Each collected "M" missile pickup adds +1 (up to pickup_bonus_max), escort missile slots add theirs, and the total
+    // missiles in flight never exceeds max_active_top = 8.
+    const MISSILE = Object.freeze({ speed:420, turn_rate:6, damage:1, lifetime_s:2.5, launch_interval_s:.5, max_active:4, max_active_top:8, pickup_bonus_max:4, box:{ w:8, h:14 } });
     // Each bomb destroys every enemy bullet and enemy ship within the radius; Djev decides when.
     const BOMB = Object.freeze({ charges:3, max_charges:6, radius_px:200 });
     // Weapon level from collected weapon blocks (each block is +1, upgrades are cumulative):
     //   0-2  gun spread 1 / 3 / 5 ways, missile salvo 1 / 2 / 3;
-    //   3    rapid fire: gun cooldown x rapid_cooldown_scale (0.5);
-    //   4    explosive shells: a player gun shot bursts on hit, and everything inside splash_radius_px takes
-    //        splash_damage (bosses included, no instant kill) and enemy bullets inside the radius are cleared;
+    //   3    rapid fire: gun cooldown and escort fire interval x rapid_cooldown_scale (0.5);
+    //   4    explosive shells: a player gun shot bursts on hit, every other enemy ship whose hull is inside
+    //        splash_radius_px takes splash_damage (a boss loses hp but is never killed by splash), and enemy
+    //        bullets inside the radius are cleared;
     //   5    missile swarm: 8 missiles per salvo, fanned over swarm_fan_rad each side and launched in parallel.
     // A salvo (ship plus escort-jet missile slots) never exceeds salvo_total_max missiles.
     const WEAPON = Object.freeze({ max_level:5, spread_by_level:[1, 3, 5, 5, 5, 5], spread_step_rad:.16, missile_salvo_by_level:[1, 2, 3, 3, 3, 8],
       missile_cap_bonus_by_level:[0, 1, 2, 2, 2, 4], salvo_fan_rad:.55, swarm_fan_rad:1.05, salvo_total_max:8,
-      rapid_from_level:3, rapid_cooldown_scale:.5, splash_from_level:4, splash_radius_px:44, splash_damage:1, swarm_from_level:5 });
+      rapid_from_level:3, rapid_cooldown_scale:.5, splash_from_level:4, splash_radius_px:70, splash_damage:2, swarm_from_level:5 });
     // Pickups float through the lower play area (away from the enemy formation) and are collected by flying into them.
     // Magnet: a pickup whose centre comes within magnet_radius_px of the ship centre is captured and pulled toward the ship,
     // its pull speed starting at magnet_min_speed_px_s and ramping up by magnet_accel_px_s2 to magnet_speed_px_s, so a pickup
     // next to the ship is collected without steering onto it. The starting pull (180) beats ship speed plus drift (112 + 55),
     // so a captured pickup always reaches the ship, whatever the ship does next. The forecast counts a move as collecting a
     // pickup when its path comes within magnet_radius_px - magnet_forecast_margin_px (tick sampling margin).
+    // Kinds: bomb (+1 bomb charge), weapon (+1 weapon level), wingman (+1 escort jet), missile ("M": +1 missile cap).
     const PICKUP = Object.freeze({ box:{ w:24, h:24 }, lifetime_s:14, fade_s:2, speed:55, y_min:260, y_max:560,
       magnet_radius_px:110, magnet_min_speed_px_s:180, magnet_speed_px_s:280, magnet_accel_px_s2:900, magnet_reach_s:.6, magnet_forecast_margin_px:4,
-      spawn_interval_s:{ bomb:11, weapon:17, wingman:16 }, first_spawn_s:{ bomb:6, weapon:9, wingman:14 } });
+      spawn_interval_s:{ bomb:11, weapon:17, wingman:16, missile:15 }, first_spawn_s:{ bomb:6, weapon:9, wingman:14, missile:12 } });
+    const PICKUP_KINDS = Object.freeze(Object.keys(PICKUP.spawn_interval_s));
     // Up to eight little escort jets ring the ship, each facing its own direction (degrees, 0 = right, 90 = down).
     // Their shots destroy enemies and also enemy bullets and missiles; the first two add a missile to each salvo.
-    // The ring orbits the ship at orbit_rad_s. Escorts fire (only while the fire answer is shoot) every fire_interval_s,
-    // on their own clock so the ship's rapid fire does not change it. Each shot auto-aims, leading its target
-    // (intercept at shot_speed): first the enemy missile nearest the ship within defend_range_px of the ship, otherwise
-    // the nearest enemy ship or missile within aim_range_px of that jet (the whole arena); with none it flies along the
-    // jet's outward facing.
+    // The ring orbits the ship at orbit_rad_s. Escorts fire (only while the fire answer is shoot) on their own clock
+    // every fire_interval_s (halved by rapid fire from WEAPON.rapid_from_level). Each shot flies straight along its
+    // jet's outward facing on the orbiting ring; escorts do not aim.
     // With no bombs left, a detonate decision sacrifices one jet for the same blast.
     const WINGMAN = Object.freeze({ max:8, radius:40, slot_angles_deg:[180, 0, 225, 315, 135, 45, 270, 90], shot_speed:520, missile_slots:2, orbit_rad_s:1.6,
-      fire_interval_s:.17, aim_range_px:1200, defend_range_px:260 });
+      fire_interval_s:.17 });
     // A boss appears at random times, parks near the top, and saturates the arena with bullet rings, aimed fans, and homing missiles.
     const BOSS = Object.freeze({ hp:45, w:96, h:58, score:500, station_y:95, speed:70, first_s:[40, 60], interval_s:[35, 55], bomb_damage:20,
       ring:{ count:14, interval_s:2.4, speed:150 }, fan:{ count:7, spread_rad:1, interval_s:1.8, speed:190 }, missiles:{ count:2, interval_s:4.5 } });
     const ENEMY_MISSILE = Object.freeze({ speed:190, turn_rate:1.4, lifetime_s:5, box:{ w:10, h:10 } });
+    // Clearing every fifth wave (so waves 6, 11, 16, ... start with it) grants one extra life, up to EXTRA_LIFE.max_lives.
+    const EXTRA_LIFE = Object.freeze({ every_waves:5, max_lives:5 });
     const BOMB_IDS = Object.freeze(["hold","detonate"]);
     const RULES = Object.freeze({
       arena:{ width:WIDTH, height:HEIGHT },
@@ -554,6 +562,7 @@
       bomb:BOMB,
       weapon:WEAPON,
       pickup:PICKUP,
+      extra_life:EXTRA_LIFE,
       wingman:WINGMAN,
       boss:BOSS,
       enemy_missile:ENEMY_MISSILE,
@@ -667,13 +676,11 @@
       };
     }
 
-    // Clearing every tenth wave grants one extra life, up to EXTRA_LIFE.max_lives.
-    const EXTRA_LIFE = Object.freeze({ every_waves:10, max_lives:5 });
-
     function startWave(game, events = game.events) {
       if (game.wave > 1 && (game.wave - 1) % EXTRA_LIFE.every_waves === 0 && game.player.lives < EXTRA_LIFE.max_lives) {
         game.player.lives += 1;
         game.player.maxLives = Math.max(game.player.maxLives, game.player.lives);
+        game.counters.extraLives = (game.counters.extraLives || 0) + 1;
         events.push({ type:"extra_life", tick:game.tick, wave:game.wave, lives:game.player.lives });
       }
       game.profile = waveProfile(game.wave);
@@ -707,6 +714,7 @@
         playerBullets: [],
         playerMissiles: [],
         missileClock_s: 0,
+        missileBonus: 0,
         bomb: { charges:BOMB.charges, last_decision_id:null },
         weaponLevel: 0,
         wingmen: 0,
@@ -746,6 +754,7 @@
           bombPickups: 0,
           weaponPickups: 0,
           wingmanPickups: 0,
+          missilePickups: 0,
           wingmenLost: 0,
           jetSacrifices: 0,
           bulletsIntercepted: 0,
@@ -754,8 +763,10 @@
           enemyMissilesFired: 0,
           enemyMissilesDestroyed: 0,
           splashBursts: 0,
+          splashDamaged: 0,
           splashKills: 0,
           splashBulletsCleared: 0,
+          extraLives: 0,
         },
       };
       startWave(game);
@@ -1154,7 +1165,9 @@
 
     function wantedPickups(game) {
       return game.pickups.filter((pickup) => pickup.kind === "bomb" ? game.bomb.charges < BOMB.max_charges
-        : pickup.kind === "wingman" ? game.wingmen < WINGMAN.max : game.weaponLevel < WEAPON.max_level);
+        : pickup.kind === "wingman" ? game.wingmen < WINGMAN.max
+        : pickup.kind === "missile" ? bonusMissileCap(game) < MISSILE.max_active_top && (game.missileBonus || 0) < MISSILE.pickup_bonus_max
+        : game.weaponLevel < WEAPON.max_level);
     }
 
     // First time within the segment at which the pickup centre (linear motion) is within radius of the ship centre.
@@ -1186,7 +1199,7 @@
           let contact = radialContact(segment, target, PICKUP.magnet_radius_px - PICKUP.magnet_forecast_margin_px);
           // The pull needs up to magnet_reach_s to bring the pickup in; one that expires first is not collected.
           if (contact !== null && contact + PICKUP.magnet_reach_s >= PICKUP.lifetime_s - pickup.age_s) contact = null;
-          // A weapon block wins over a bomb pickup on the same path: upgrading is the priority.
+          // A power-up (weapon, escort jet, or missile block) wins over a bomb pickup on the same path: upgrading is the priority.
           const upgrade = (kind) => kind !== "bomb";
           const better = !collect || upgrade(pickup.kind) && !upgrade(collect.kind) || upgrade(pickup.kind) === upgrade(collect.kind) && contact < collect.at;
           if (contact !== null && better) collect = { kind:pickup.kind, at:contact };
@@ -1194,7 +1207,7 @@
       }
       const endpoint = pointAtSegments(segments, leaseEndMs);
       const endS = leaseEndMs / 1000;
-      // Head for weapon blocks proactively; bomb pickups are the target only when no weapon block is wanted.
+      // Head for power-ups (weapon, escort jet, missile blocks) proactively; bomb pickups are the target only when none is wanted.
       const goals = wanted.some((pickup) => pickup.kind !== "bomb") ? wanted.filter((pickup) => pickup.kind !== "bomb") : wanted;
       let nearest = null;
       for (const pickup of goals) {
@@ -1342,8 +1355,14 @@
       return { state, forecast };
     }
 
+    // Missiles allowed in flight: the weapon-level cap plus the M-pickup bonus plus escort missile slots, never above 8.
     function missileCap(game) {
-      return shipMissileCap(game.weaponLevel) + Math.min(game.wingmen, WINGMAN.missile_slots);
+      return Math.min(MISSILE.max_active_top, bonusMissileCap(game) + Math.min(game.wingmen, WINGMAN.missile_slots));
+    }
+
+    // The ship's own cap: weapon level plus collected M pickups, at most max_active_top.
+    function bonusMissileCap(game) {
+      return Math.min(MISSILE.max_active_top, shipMissileCap(game.weaponLevel) + (game.missileBonus || 0));
     }
 
     function shipMissileCap(level) {
@@ -1388,48 +1407,22 @@
       game.player.cooldown_s = gunCooldownS(game.weaponLevel);
     }
 
-    // An escort's target: the enemy missile closest to the ship within WINGMAN.defend_range_px of the ship, else the
-    // nearest enemy ship or missile within WINGMAN.aim_range_px of the jet (ties by id).
-    function escortTarget(game, origin) {
-      let threat = null;
-      for (const missile of game.enemyMissiles) {
-        const distance = Math.hypot(missile.x - game.player.x, missile.y - game.player.y);
-        if (distance > WINGMAN.defend_range_px) continue;
-        if (!threat || distance < threat.distance || distance === threat.distance && String(missile.id) < String(threat.id)) {
-          threat = { id:missile.id, x:missile.x, y:missile.y, vx:Math.cos(missile.heading) * ENEMY_MISSILE.speed, vy:Math.sin(missile.heading) * ENEMY_MISSILE.speed, distance };
-        }
-      }
-      if (threat) return threat;
-      let best = null;
-      const consider = (id, x, y, vx, vy) => {
-        const distance = Math.hypot(x - origin.x, y - origin.y);
-        if (distance > WINGMAN.aim_range_px) return;
-        if (!best || distance < best.distance || distance === best.distance && String(id) < String(best.id)) best = { id, x, y, vx, vy, distance };
-      };
-      for (const enemy of game.enemies) {
-        const v = enemyVelocity(game, enemy);
-        consider(enemy.id, enemy.x, enemy.y, v.vx, v.vy);
-      }
-      for (const missile of game.enemyMissiles) consider(missile.id, missile.x, missile.y, Math.cos(missile.heading) * ENEMY_MISSILE.speed, Math.sin(missile.heading) * ENEMY_MISSILE.speed);
-      return best;
+    // Escort fire interval: halved by rapid fire (weapon level 3+), like the gun cooldown.
+    function escortIntervalS(level) {
+      return WINGMAN.fire_interval_s * (level >= WEAPON.rapid_from_level ? WEAPON.rapid_cooldown_scale : 1);
     }
 
-    // Escort shots are weapon physics: each jet leads its nearest target, or fires along its facing.
+    // Escort shots are weapon physics: each jet fires straight along its own outward facing on the orbiting ring.
     function emitWingmanShots(game, command, events) {
       const authorizedBy = command ? { decision_id:command.decision_id, sequence:command.sequence, movement:command.movement, fire:command.fire, lease:command.lease, ...(command.intent == null ? {} : { intent:command.intent }) } : null;
       for (const wing of wingmanPositions(game)) {
-        const target = escortTarget(game, wing);
-        let heading = wing.angle;
-        if (target) {
-          const t = interceptTime(wing, WINGMAN.shot_speed, target) ?? 0;
-          heading = Math.atan2(target.y + target.vy * t - wing.y, target.x + target.vx * t - wing.x);
-        }
-        const shot = { id:entityId(game, "pshot"), x:wing.x, y:wing.y, vx:Math.cos(heading) * WINGMAN.shot_speed, vy:Math.sin(heading) * WINGMAN.shot_speed, radius:PLAYER_SHOT_RADIUS - 1, level:game.weaponLevel, wingman:wing.slot, ...(target ? { aim_id:target.id } : {}), authorizedBy };
+        const heading = wing.angle;
+        const shot = { id:entityId(game, "pshot"), x:wing.x, y:wing.y, vx:Math.cos(heading) * WINGMAN.shot_speed, vy:Math.sin(heading) * WINGMAN.shot_speed, radius:PLAYER_SHOT_RADIUS - 1, level:game.weaponLevel, wingman:wing.slot, authorizedBy };
         game.playerBullets.push(shot);
         game.counters.playerShots += 1;
         events.push({ type:"shot", tick:game.tick, entity_id:shot.id, decision_id:authorizedBy && authorizedBy.decision_id, sequence:authorizedBy && authorizedBy.sequence, x:shot.x, y:shot.y });
       }
-      game.wingClock_s = WINGMAN.fire_interval_s;
+      game.wingClock_s = escortIntervalS(game.weaponLevel);
     }
 
     function spawnPickup(game, kind, events) {
@@ -1451,7 +1444,9 @@
 
     // Pickups drift and bounce inside the play band; they expire after their lifetime.
     function updatePickups(game, events) {
-      for (const kind of ["bomb", "weapon", "wingman"]) {
+      for (const kind of PICKUP_KINDS) {
+        // A fixture or checkpoint without a clock for a kind never spawns that kind.
+        if (!Number.isFinite(game.pickupClock_s[kind])) continue;
         game.pickupClock_s[kind] -= DT_SECONDS;
         if (game.pickupClock_s[kind] <= 0) {
           spawnPickup(game, kind, events);
@@ -1488,7 +1483,8 @@
     }
 
     function applyPickup(game, pickup, events) {
-      const read = () => pickup.kind === "bomb" ? game.bomb.charges : pickup.kind === "wingman" ? game.wingmen : game.weaponLevel;
+      const read = () => pickup.kind === "bomb" ? game.bomb.charges : pickup.kind === "wingman" ? game.wingmen
+        : pickup.kind === "missile" ? bonusMissileCap(game) : game.weaponLevel;
       const before = read();
       if (pickup.kind === "bomb") {
         game.bomb.charges = Math.min(BOMB.max_charges, game.bomb.charges + 1);
@@ -1496,6 +1492,9 @@
       } else if (pickup.kind === "wingman") {
         game.wingmen = Math.min(WINGMAN.max, game.wingmen + 1);
         game.counters.wingmanPickups += 1;
+      } else if (pickup.kind === "missile") {
+        game.missileBonus = Math.min(MISSILE.pickup_bonus_max, (game.missileBonus || 0) + 1);
+        game.counters.missilePickups = (game.counters.missilePickups || 0) + 1;
       } else {
         game.weaponLevel = Math.min(WEAPON.max_level, game.weaponLevel + 1);
         game.counters.weaponPickups += 1;
@@ -1568,7 +1567,8 @@
     }
 
     // Level 4+ gun shells burst where they hit: every other enemy ship whose hull is within WEAPON.splash_radius_px takes
-    // splash_damage (a boss only loses hp), and enemy bullets inside the radius are cleared.
+    // splash_damage (a boss only loses hp and is never killed by splash: it stays at 1 hp at least), and enemy bullets
+    // inside the radius are cleared.
     function explodeShell(game, shot, hitEnemyId, events) {
       const center = { x:shot.x, y:shot.y };
       const inside = (thing) => Math.hypot(thing.x - center.x, thing.y - center.y) <= WEAPON.splash_radius_px;
@@ -1582,7 +1582,8 @@
         const index = game.enemies.findIndex((enemy) => enemy.id === id);
         if (index < 0) continue;
         const enemy = game.enemies[index];
-        enemy.hp -= WEAPON.splash_damage;
+        enemy.hp = enemy.type === "boss" ? Math.max(Math.min(enemy.hp, 1), enemy.hp - WEAPON.splash_damage) : enemy.hp - WEAPON.splash_damage;
+        game.counters.splashDamaged = (game.counters.splashDamaged || 0) + 1;
         events.push({ type:"enemy_damaged", tick:game.tick, enemy_id:enemy.id, shot_id:shot.id, hp:enemy.hp, source:"splash", decision_id:shot.authorizedBy && shot.authorizedBy.decision_id });
         if (enemy.hp <= 0) {
           destroyed.push(enemy.id);
@@ -2123,6 +2124,7 @@
         playerBullets: game.playerBullets,
         playerMissiles: game.playerMissiles,
         missileClock_s: game.missileClock_s,
+        missileBonus: game.missileBonus || 0,
         bomb: game.bomb,
         weaponLevel: game.weaponLevel,
         wingmen: game.wingmen,
@@ -2177,6 +2179,8 @@
         score: game.score,
         bomb_charges: game.bomb.charges,
         active_missiles: game.playerMissiles.length,
+        missile_cap: missileCap(game),
+        missile_bonus: game.missileBonus || 0,
         weapon_level: game.weaponLevel,
         wingmen: game.wingmen,
         game_over: Boolean(game.terminal),
@@ -2189,10 +2193,10 @@
     }
 
     globalThis.SpaceDecisionCore = Object.freeze({
-      ENGINE_VERSION, DT_MS, ACTION_IDS, FIRE_IDS, BOMB_IDS, MISSILE, BOMB, WEAPON, PICKUP, WINGMAN, BOSS, ENEMY_MISSILE, LEASE_TICKS, LEASE_MS, RULES, DEFAULT_DIFFICULTY, HARDEST_DIFFICULTY,
+      ENGINE_VERSION, DT_MS, ACTION_IDS, FIRE_IDS, BOMB_IDS, MISSILE, BOMB, WEAPON, PICKUP, PICKUP_KINDS, EXTRA_LIFE, WINGMAN, BOSS, ENEMY_MISSILE, LEASE_TICKS, LEASE_MS, RULES, DEFAULT_DIFFICULTY, HARDEST_DIFFICULTY,
       createGame, stepGame, coordinateAction, stepPolicyTick, observeGame, serializeGame, restoreGame, hashGame, gameStatus,
       normalizeDifficulty, arenaFor, velocityFor, waveProfile, baseEnemyCountForWave, enemyCountForWave,
-      fireIntervalForDifficulty, bulletSpeedForDifficulty, rulesManifest,
+      fireIntervalForDifficulty, bulletSpeedForDifficulty, rulesManifest, missileCap, bonusMissileCap,
       _private: Object.freeze({ sweptContact, segmentClearance, hostileThreats, stableStringify, rankRouteOptions }),
     });
   })();
@@ -2521,6 +2525,8 @@
     let lastSelected = "none";
     let bombFlash = null;
     let splashFx = [];
+    const splashMarks = new Map(); // enemy id -> when splash last damaged it (visual bracket)
+    const waveStarts = new Map(); // wave -> enemy count from its wave_started event (briefing text)
     let lastExecuted = "neutral · hold · cease";
     let nextRequestAllowedWallMs = 0;
     let difficulty = core.normalizeDifficulty({});
@@ -2692,6 +2698,9 @@
         fastBulletSpeed:$("fast-bullet-speed").value,
       });
       syncDifficultyControls();
+      // A slider the user moves is their setting: restarts go back to it, and the auto-ramp continues from here.
+      baseDifficulty = { ...difficulty };
+      rampLevel = rampFractionOf(difficulty);
       if (introActive) {
         // No run yet: just refresh the attract-screen preview with the new difficulty.
         game = core.createGame({ seed:20260920, difficulty });
@@ -2709,6 +2718,75 @@
         { type:"checkpoint", tick:game.tick, wall_ms:wallMs(runState), hash:core.hashGame(game), checkpoint:core.serializeGame(game) },
       ]);
       addHistory("tuning", `live · bullets ${difficulty.bulletDensity.toFixed(2)}x · enemies ${difficulty.enemyDensity.toFixed(2)}x · fast ${Math.round(difficulty.fastBulletRatio * 100)}%`, "warn");
+    }
+
+    // ---- Demo auto-ramp: page pacing, not a core rule ----
+    // In autopilot only, every AUTO_RAMP.interval_ms of mission time the overall threat fraction rises by AUTO_RAMP.step
+    // (0 -> 1 in about 8 minutes) and each threat slider is set to that fraction of its range, never below where it
+    // already is. It goes through the same live path as a slider release: the slider UI, game.difficulty, and a
+    // difficulty_changed event (source auto_ramp) plus a checkpoint in the trace, so replays stay deterministic.
+    const AUTO_RAMP = Object.freeze({ interval_ms:20000, step:.04 });
+    const THREAT_SLIDERS = Object.freeze({
+      bulletDensity:{ min:1, max:8, step:.25 },
+      enemyDensity:{ min:1, max:6, step:.25 },
+      fastBulletRatio:{ min:0, max:1, step:.05 },
+      fastBulletSpeed:{ min:1.1, max:4.8, step:.1 },
+    });
+    let autoRamp = true;
+    let rampLevel = 0;
+    let rampClockMs = 0;
+    let baseDifficulty = { ...difficulty };
+
+    // The overall level the sliders already stand at: the lowest fraction of range among them.
+    function rampFractionOf(settings) {
+      return Math.min(...Object.entries(THREAT_SLIDERS).map(([key, range]) => Math.max(0, Math.min(1, (settings[key] - range.min) / (range.max - range.min)))));
+    }
+
+    function rampTarget(level) {
+      return Object.fromEntries(Object.entries(THREAT_SLIDERS).map(([key, range]) => {
+        const raw = range.min + level * (range.max - range.min);
+        return [key, Math.min(range.max, range.min + Math.round((raw - range.min) / range.step) * range.step)];
+      }));
+    }
+
+    function applyAutoRampStep() {
+      if (!game || !runState || game.terminal) return false;
+      rampLevel = Math.min(1, Math.round((rampLevel + AUTO_RAMP.step) * 1e6) / 1e6);
+      const target = rampTarget(rampLevel);
+      const next = core.normalizeDifficulty(Object.fromEntries(Object.keys(THREAT_SLIDERS).map((key) => [key, Math.max(difficulty[key], target[key])])));
+      if (Object.keys(THREAT_SLIDERS).every((key) => next[key] === difficulty[key])) return false;
+      difficulty = next;
+      syncDifficultyControls();
+      game.difficulty = { ...difficulty };
+      invalidateQualification("auto_ramp");
+      enqueueEvents([
+        { type:"difficulty_changed", source:"auto_ramp", tick:game.tick, wall_ms:wallMs(runState), ramp_level:rampLevel, difficulty:{ ...difficulty } },
+        { type:"checkpoint", tick:game.tick, wall_ms:wallMs(runState), hash:core.hashGame(game), checkpoint:core.serializeGame(game) },
+      ]);
+      addHistory("threat", `THREAT UP · ramp ${Math.round(rampLevel * 100)}% · bullets ${difficulty.bulletDensity.toFixed(2)}x · enemies ${difficulty.enemyDensity.toFixed(2)}x · fast ${Math.round(difficulty.fastBulletRatio * 100)}% @ ${difficulty.fastBulletSpeed.toFixed(1)}x`, "warn");
+      return true;
+    }
+
+    // Called with the mission time just simulated under the autopilot; manual flight and pause do not advance it.
+    function autoRampTick(elapsedMs) {
+      if (!autoRamp || !autopilot || introActive || paused || !runState || runState.ending || !game || game.terminal) return;
+      rampClockMs += elapsedMs;
+      while (rampClockMs >= AUTO_RAMP.interval_ms) {
+        rampClockMs -= AUTO_RAMP.interval_ms;
+        applyAutoRampStep();
+      }
+    }
+
+    function autoRampText() {
+      return !autoRamp ? "Auto ramp: OFF" : autopilot ? "Auto ramp: ON" : "Auto ramp: ON · paused";
+    }
+
+    function setAutoRamp(value) {
+      if (autoRamp === value) return;
+      autoRamp = value;
+      $("auto-ramp-button").textContent = autoRampText();
+      $("auto-ramp-button").setAttribute?.("aria-pressed", String(autoRamp));
+      if (!introActive) addHistory("threat", `auto ramp ${autoRamp ? "on" : "off"}`, "");
     }
 
     function controllerActiveForObservation() {
@@ -2787,13 +2865,18 @@
     function updateRecentFromEvents(events) {
       for (const event of events) {
         if (event.type === "boss_spawned") addHistory("boss", "boss incoming", "warn");
-        if (event.type === "extra_life") addHistory("life", `wave ${event.wave} bonus · ${event.lives} lives`, "ok");
+        if (event.type === "extra_life") addHistory("life", `wave ${event.wave - 1} cleared · +1 life · ${event.lives} lives`, "ok");
+        if (event.type === "wave_started") {
+          waveStarts.set(event.wave, event.count);
+          addHistory("wave", `WAVE ${String(event.wave).padStart(2, "0")} · ${event.count} hostiles`, "");
+        }
         if (event.type === "boss_destroyed") addHistory("boss", `boss destroyed by ${event.source}`, "ok");
         if (event.type === "pickup_collected") {
           addHistory("pickup", `${event.kind} pickup · ${event.before} → ${event.after}`, "ok");
         }
         if (event.type === "splash") {
-          splashFx.push({ x:event.x, y:event.y, radius:event.radius_px, born:performance.now() });
+          splashFx.push({ x:event.x, y:event.y, radius:event.radius_px, born:performance.now(), damaged:event.damaged_enemy_ids.length });
+          for (const id of event.damaged_enemy_ids) splashMarks.set(id, performance.now());
           if (splashFx.length > 24) splashFx = splashFx.slice(-24);
         }
         if (event.type === "bomb_detonated") {
@@ -3079,6 +3162,7 @@
         accumulatorMs -= FIXED_DT_MS;
         steps += 1;
       }
+      if (autopilot && steps) autoRampTick(steps * FIXED_DT_MS);
       if (steps >= MAX_CATCHUP_STEPS && accumulatorMs > MAX_LAG_MS) {
         invalidateQualification("catchup_lag");
         game.terminal = { reason:"timing_invalid", tick:game.tick, sim_ms:game.sim_ms, lives:game.player.lives, wave:game.wave, score:game.score };
@@ -3102,12 +3186,13 @@
       $("hud-run").textContent = runId || (introActive ? "not started" : "starting");
       $("hud-elapsed").textContent = (game.sim_ms / 1000).toFixed(1) + " s";
       $("hud-mode").textContent = introActive ? "INTRO" : game.terminal ? "ENDED" : paused ? "PAUSED" : autopilot ? "AUTO" : "MANUAL";
+      $("auto-ramp-button").textContent = autoRampText();
       $("touch-pad").classList.toggle("show", isTouchDevice && !autopilot && !introActive && !game.terminal);
       $("hud-bombs").textContent = "●".repeat(game.bomb.charges) + "○".repeat(Math.max(0, core.BOMB.max_charges - game.bomb.charges));
       $("hud-weapon").textContent = weaponText(game.weaponLevel);
       $("hud-weapon").title = $("hud-weapon").textContent;
-      $("hud-pickups").textContent = `${game.counters.bombPickups} bomb · ${game.counters.weaponPickups} weapon · ${game.wingmen}/${core.WINGMAN.max} jets${game.boss.active_id ? " · BOSS" : ""}`;
-      $("hud-missiles").textContent = `${game.playerMissiles.length} · ${game.counters.missileKills} kills`;
+      $("hud-pickups").textContent = `${game.counters.bombPickups} bomb · ${game.counters.weaponPickups} weapon · ${game.counters.missilePickups || 0} M · ${game.wingmen}/${core.WINGMAN.max} jets${game.boss.active_id ? " · BOSS" : ""}`;
+      $("hud-missiles").textContent = `${game.playerMissiles.length}/${core.missileCap(game)} · ${game.counters.missileKills} kills`;
       $("selected").textContent = lastSelected;
       $("executed").textContent = currentExecutingText();
       $("request-status").textContent = controller.pending ? `pending · E${controller.epoch}/S${controller.pending.sequence}` : `idle · E${controller.epoch}`;
@@ -3250,6 +3335,9 @@
       wingman_pickup:{ rows:[
         ".....LL.....", "....LLLL....", "....LKKL....", "...LKWWWL...", "...LKWKKL...", "..LLKWWKLL..", "..LKKWKKKL..",
         ".LLKKWKKKLL.", ".LKKKKKKKKL.", "LLLLLLLLLLLL" ] },
+      missile_pickup:{ rows:[
+        ".##########.", "##KKKKKKKK##", "#KWKKKKKKWK#", "#KWWKKKKWWK#", "#KWKWKKWKWK#", "#KWKKWWKKWK#", "#KWKKKKKKWK#",
+        "#KWKKKKKKWK#", "##KKKKKKKK##", ".##########." ] },
       wingman:{ odd:true, half:[ "...L", "..LW", "L.LL", "LLEL", "L.EE", "...O" ] },
       missile:{ rows:[ ".#.", "#W#", "GWG", "GWG", "G.G", ".Y.", ".O." ] },
       enemy_missile:{ rows:[ "..R..", ".RWR.", ".RRR.", "RDRDR", "R.R.R", "..Y..", "..O.." ] },
@@ -3398,27 +3486,58 @@
       if (t < .35) px(cx - 2 - blast.big, cy - 2 - blast.big, 5 + blast.big * 2, 5 + blast.big * 2, t < .15 ? "W" : "Y");
     }
 
-    // Explosive-shell burst: a white flash, then a stepped ring that expands to the splash radius
-    // through yellow, orange and red, with a sparse dithered fill inside.
-    const SPLASH_FX_MS = 320;
+    // Explosive-shell burst: a hot white flash, a double pixel shockwave that overshoots the splash radius through
+    // white, yellow, orange and red, a dithered blast fill, and radial sparks; enemies it damaged get a yellow bracket.
+    const SPLASH_FX_MS = 520;
+    const SPLASH_MARK_MS = 360;
     function drawSplash(fx, nowMs) {
       const t = Math.min(1, (nowMs - fx.born) / SPLASH_FX_MS);
       const cx = lx(fx.x);
       const cy = lx(fx.y);
-      const radius = Math.max(2, Math.round(fx.radius / PIXEL * (.35 + .65 * Math.sqrt(t))));
+      const full = fx.radius / PIXEL;
+      const radius = Math.max(3, Math.round(full * (.3 + .85 * Math.sqrt(t))));
       const ramp = ["W", "Y", "O", "R"];
       const color = ramp[Math.min(ramp.length - 1, Math.floor(t * ramp.length))];
-      if (t < .25) {
-        px(cx - 3, cy - 3, 7, 7, "Y");
-        px(cx - 2, cy - 2, 5, 5, "W");
+      if (t < .18) {
+        // Flash: a bright disc about half the radius, a white core, and a thin halo at the full radius.
+        const flash = Math.round(full * (.35 + t));
+        lctx.fillStyle = PALETTE[t < .09 ? "W" : "Y"];
+        for (let y = -flash; y <= flash; y += 1) {
+          const span = Math.floor(Math.sqrt(Math.max(0, flash * flash - y * y)));
+          lctx.fillRect(cx - span, cy + y, span * 2 + 1, 1);
+        }
+        px(cx - 4, cy - 4, 9, 9, "W");
+        pixelRing(cx, cy, Math.round(full), "Y", 1);
       }
-      const gap = t < .5 ? 3 : 5;
-      lctx.fillStyle = PALETTE[t < .5 ? "Y" : "O"];
+      const gap = t < .4 ? 3 : t < .7 ? 4 : 6;
+      lctx.fillStyle = PALETTE[t < .4 ? "Y" : t < .7 ? "O" : "R"];
       for (let y = -radius + 1; y < radius; y += gap) {
         const span = Math.floor(Math.sqrt(Math.max(0, radius * radius - y * y))) - 1;
         for (let x = -span + ((y + radius) / gap % 2 ? 1 : 0); x <= span; x += gap) lctx.fillRect(cx + x, cy + y, 1, 1);
       }
-      pixelRing(cx, cy, radius, color, t < .5 ? 2 : 1);
+      pixelRing(cx, cy, radius, color, t < .6 ? 3 : 2);
+      if (radius > 8) pixelRing(cx, cy, radius - 5, t < .5 ? "O" : "R", 1);
+      // Sparks fly out past the ring.
+      for (let i = 0; i < 12; i += 1) {
+        const angle = i / 12 * Math.PI * 2 + .26;
+        const r = radius + 3 + (i % 3) * 3;
+        px(Math.round(cx + Math.cos(angle) * r), Math.round(cy + Math.sin(angle) * r), 2, 2, i % 2 ? "Y" : "W");
+      }
+    }
+
+    function drawSplashMark(enemy, nowMs) {
+      const at = splashMarks.get(enemy.id);
+      if (at === undefined) return;
+      if (nowMs - at > SPLASH_MARK_MS) { splashMarks.delete(enemy.id); return; }
+      if (Math.floor((nowMs - at) / 60) % 2) return;
+      const x0 = lx(enemy.x - enemy.w / 2) - 2;
+      const y0 = lx(enemy.y - enemy.h / 2) - 2;
+      const x1 = lx(enemy.x + enemy.w / 2) + 1;
+      const y1 = lx(enemy.y + enemy.h / 2) + 1;
+      for (const [x, y, dx, dy] of [[x0, y0, 1, 1], [x1, y0, -1, 1], [x0, y1, 1, -1], [x1, y1, -1, -1]]) {
+        px(Math.min(x, x + dx * 3), y, 4, 1, "Y");
+        px(x, Math.min(y, y + dy * 3), 1, 4, "Y");
+      }
     }
 
     function drawEnemyBullet(shot) {
@@ -3441,6 +3560,117 @@
         px(x - 1, y - 2, 2, 4, outer);
         px(x - 1, y - 1, 2, 2, inner);
       }
+    }
+
+    // ---- Wave briefing (visual only: never pauses the simulation or blocks input) ----
+    // A big pixel "WAVE nn" scales and flashes in, then a green-on-black terminal box types a briefing with real values.
+    const WAVE_BANNER = Object.freeze({ title_in_ms:260, flash_ms:700, box_at_ms:350, type_cps:35, hold_ms:350, min_ms:2500, fade_ms:250, max_line_px:330 });
+    let waveBanner = null;
+    let waveBannerGame = null;
+
+    // Overall threat multiplier shown in the briefing: mean of bullet and enemy density, scaled by the fast-bullet boost.
+    function threatMultiplier(settings) {
+      const d = core.normalizeDifficulty(settings);
+      return (d.bulletDensity + d.enemyDensity) / 2 * (1 + d.fastBulletRatio * (d.fastBulletSpeed - 1));
+    }
+
+    // Waves still to clear, counting the current one, before the next extra life.
+    function wavesToExtraLife(wave) {
+      const every = core.EXTRA_LIFE.every_waves;
+      return every - ((Math.max(1, wave) - 1) % every);
+    }
+
+    function waveBriefing(state, hostiles) {
+      const n = wavesToExtraLife(state.wave);
+      const life = state.player.lives >= core.EXTRA_LIFE.max_lives ? "LIVES MAX" : `EXTRA LIFE IN ${n} WAVE${n === 1 ? "" : "S"}`;
+      return [`SECTOR ${String(state.wave).padStart(2, "0")}`, `HOSTILES ${hostiles}`, `THREAT ${threatMultiplier(state.difficulty).toFixed(1)}x`, life];
+    }
+
+    // Greedy wrap of " // "-joined segments into terminal lines, each with a "> " prompt.
+    function briefingLines(segments, fits) {
+      const lines = [];
+      for (const segment of segments) {
+        const last = lines[lines.length - 1];
+        if (last && fits(`${last} // ${segment}`)) lines[lines.length - 1] = `${last} // ${segment}`;
+        else lines.push(`> ${segment}`);
+      }
+      return lines;
+    }
+
+    function drawWaveBanner(nowMs) {
+      if (introActive || !game || game.terminal) return;
+      if (waveBannerGame !== game || !waveBanner || waveBanner.wave !== game.wave) {
+        waveBannerGame = game;
+        const hostiles = waveStarts.get(game.wave) ?? game.enemies.filter((enemy) => enemy.type !== "boss").length;
+        // On a phone the arena is drawn at ~0.75 css px per buffer pixel, so the briefing uses a larger font there.
+        const compact = (canvas.clientWidth || canvas.width) < 700;
+        waveBanner = { wave:game.wave, born:nowMs, segments:waveBriefing(game, hostiles), lines:null, fontPx:compact ? 24 : 16, titlePx:compact ? 32 : 24, maxLinePx:compact ? LO_W - 40 : WAVE_BANNER.max_line_px };
+      }
+      const b = WAVE_BANNER;
+      const age = nowMs - waveBanner.born;
+      const font = `${waveBanner.fontPx}px VT323, ui-monospace, monospace`;
+      lctx.font = font;
+      if (!waveBanner.lines) {
+        waveBanner.lines = briefingLines(waveBanner.segments, (text) => lctx.measureText(text).width <= waveBanner.maxLinePx);
+        waveBanner.chars = waveBanner.lines.reduce((sum, line) => sum + line.length, 0);
+        waveBanner.until = Math.max(b.min_ms, b.box_at_ms + waveBanner.chars / b.type_cps * 1000 + b.hold_ms);
+      }
+      if (age > waveBanner.until + b.fade_ms) return;
+      const fade = age > waveBanner.until ? 1 - (age - waveBanner.until) / b.fade_ms : 1;
+      lctx.globalAlpha = Math.max(0, Math.ceil(fade * 4) / 4);
+      // Title: scales down from 2.5x and flashes white / yellow / cyan, then settles.
+      const grow = Math.min(1, age / b.title_in_ms);
+      const scale = 1 + 1.5 * (1 - grow) * (1 - grow);
+      const size = Math.round(waveBanner.titlePx * scale / 2) * 2;
+      const flash = age < b.flash_ms ? ["W", "Y", "C"][Math.floor(age / 70) % 3] : "Y";
+      const titleY = Math.round(LO_H * .24 - size / 2);
+      const title = `WAVE ${String(waveBanner.wave).padStart(2, "0")}`;
+      pixelText(title, LO_W / 2 + 2, titleY + 2, size, "K", "center", null);
+      pixelText(title, LO_W / 2, titleY, size, flash, "center", "R");
+      if (age < 120) { lctx.fillStyle = "rgba(255,255,255,.18)"; lctx.fillRect(0, 0, LO_W, LO_H); }
+      // Terminal box.
+      if (age >= b.box_at_ms) {
+        lctx.font = font;
+        lctx.textAlign = "left";
+        lctx.textBaseline = "top";
+        const lineH = Math.round(waveBanner.fontPx * .95);
+        const widest = Math.max(...waveBanner.lines.map((line) => lctx.measureText(line).width)) + 10;
+        const boxW = Math.min(LO_W - 12, Math.round(widest + 16));
+        const boxH = waveBanner.lines.length * lineH + 14;
+        const x0 = Math.round((LO_W - boxW) / 2);
+        const y0 = Math.round(LO_H * .24 + waveBanner.titlePx / 2 + 8);
+        const open = Math.min(1, (age - b.box_at_ms) / 120);
+        const shownH = Math.max(2, Math.round(boxH * open));
+        px(x0 - 2, y0 - 2, boxW + 4, shownH + 4, "K");
+        lctx.fillStyle = "rgba(0,0,0,.9)";
+        lctx.fillRect(x0, y0, boxW, shownH);
+        lctx.strokeStyle = PALETTE.E;
+        lctx.lineWidth = 1;
+        lctx.strokeRect(x0 + .5, y0 + .5, boxW - 1, shownH - 1);
+        px(x0 + 2, y0 + 2, boxW - 4, 1, "E");
+        if (open >= 1) {
+          let left = Math.floor((age - b.box_at_ms - 120) / 1000 * b.type_cps);
+          let cursor = null;
+          waveBanner.lines.forEach((line, row) => {
+            if (left <= 0 && cursor) return;
+            const shown = line.slice(0, Math.max(0, left));
+            left -= line.length;
+            const tx = x0 + 8;
+            const ty = y0 + 7 + row * lineH;
+            lctx.fillStyle = PALETTE.E;
+            lctx.fillText(shown, tx + 1, ty + 1);
+            lctx.fillStyle = PALETTE.L;
+            lctx.fillText(shown, tx, ty);
+            if (!cursor && (left < 0 || row === waveBanner.lines.length - 1)) cursor = { x:tx + Math.ceil(lctx.measureText(shown).width) + 1, y:ty + 1 };
+          });
+          const typing = left < 0;
+          if (cursor && (typing || Math.floor(nowMs / 265) % 2 === 0)) px(cursor.x, cursor.y, Math.round(waveBanner.fontPx * .4), Math.round(waveBanner.fontPx * .68), "L");
+          // CRT scanlines over the box.
+          lctx.fillStyle = "rgba(0,0,0,.28)";
+          for (let y = y0 + 1; y < y0 + boxH - 1; y += 2) lctx.fillRect(x0 + 1, y, boxW - 2, 1);
+        }
+      }
+      lctx.globalAlpha = 1;
     }
 
     function draw() {
@@ -3520,6 +3750,7 @@
         lctx.globalAlpha = Math.ceil(alpha * 4) / 4;
         const bob = Math.round(Math.sin(nowMs / 220 + pickup.x) * 1) * PIXEL;
         if (pickup.kind === "wingman") blit(sprite("wingman_pickup"), pickup.x, pickup.y + bob);
+        else if (pickup.kind === "missile") blit(sprite("missile_pickup", Math.sin(nowMs / 140) > 0 ? "M" : "P"), pickup.x, pickup.y + bob);
         else if (pickup.kind === "bomb") blit(sprite("bomb", Math.sin(nowMs / 160) > 0 ? "O" : "Y"), pickup.x, pickup.y + bob);
         else blit(sprite("weapon", RAINBOW[Math.floor(pickup.hue / 360 * RAINBOW.length + nowMs / 110) % RAINBOW.length]), pickup.x, pickup.y + bob);
         lctx.globalAlpha = 1;
@@ -3549,6 +3780,7 @@
       }
 
       game.enemies.forEach((enemy) => {
+        drawSplashMark(enemy, nowMs);
         if (enemy.type === "boss") {
           blit(sprite("boss"), enemy.x, enemy.y);
           const barX = lx(enemy.x - enemy.w / 2);
@@ -3564,6 +3796,7 @@
       });
       blasts.forEach((blast) => drawBlast(blast, nowMs));
       splashFx = splashFx.filter((fx) => nowMs - fx.born < SPLASH_FX_MS);
+      for (const [id, at] of splashMarks) if (nowMs - at > SPLASH_MARK_MS) splashMarks.delete(id);
       splashFx.forEach((fx) => drawSplash(fx, nowMs));
 
       core.WINGMAN.slot_angles_deg.slice(0, game.wingmen).forEach((deg) => {
@@ -3587,6 +3820,8 @@
       for (let i = 0; i < Math.max(0, game.player.lives); i += 1) lctx.drawImage(sprite("player_b"), 6 + i * 15, LO_H - 16);
       for (let i = 0; i < game.bomb.charges; i += 1) lctx.drawImage(sprite("bomb", "O"), LO_W - 18 - i * 14, LO_H - 15);
       if (game.boss.active_id && blink && !game.terminal) pixelText("WARNING: BOSS", LO_W / 2, 5, 8, "R", "center");
+
+      drawWaveBanner(nowMs);
 
       if (paused || game.terminal) {
         // Checkerboard dim, then a pixel-font banner.
@@ -3632,6 +3867,11 @@
       lastFrame = runStartPerf;
       accumulatorMs = 0;
       nextRequestAllowedWallMs = 0;
+      // Each run starts from the user's own slider settings; the auto-ramp restarts from there.
+      difficulty = { ...baseDifficulty };
+      rampLevel = rampFractionOf(difficulty);
+      rampClockMs = 0;
+      waveStarts.clear();
       game = core.createGame({ seed:20260920, difficulty });
       controller = djev.createController({ run_id:null, epoch:1 });
       const run = {
@@ -3837,7 +4077,10 @@
       renderGuide("guide-keys");
       bindTouchControls();
       renderLegendSprites();
-      const autostart = new URLSearchParams(location.search).get("autostart");
+      const params = new URLSearchParams(location.search);
+      // ?autoramp=0 starts with the demo auto-ramp off (for recordings at a fixed difficulty).
+      if (params.get("autoramp") === "0") setAutoRamp(false);
+      const autostart = params.get("autostart");
       if (autostart === "1" || autostart === "auto") restartRun();
       else if (autostart === "manual") { showIntro(); startFromIntro("manual"); }
       else showIntro();
@@ -3847,6 +4090,7 @@
     window.addEventListener("keyup", onKeyUp);
     window.addEventListener("blur", () => { keys.clear(); touchState.dirs.clear(); touchState.fire = false; });
     $("autopilot-button").addEventListener("click", () => setAutopilot(!autopilot));
+    $("auto-ramp-button").addEventListener("click", () => setAutoRamp(!autoRamp));
     // Decision API settings. The page only chooses; the bridge validates, holds the key in memory
     // for the run, and never returns it. Non-secret choices persist in localStorage; the key does not.
 
