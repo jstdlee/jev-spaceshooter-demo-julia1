@@ -126,6 +126,8 @@ func (s *Server) Handler() http.Handler {
 				w.Header().Set("Cache-Control", "no-store")
 				w.Header().Set("Access-Control-Allow-Origin", "*")
 				w.Write(page)
+			case "/api/provider":
+				s.serveProvider(w)
 			case "/api/exchange":
 				s.serveExchange(w, r)
 			case "/health":
@@ -190,6 +192,8 @@ func main() {
 		RunsDir:      *runsDir,
 		DjevURL:      djevURL,
 		DjevModel:    envOr("DJEV_MODEL", "jev-latest"),
+		DjevFlavor:   defaultFlavor(),
+		DjevAPIKey:   apiKey,
 	}
 	if cfg.RunsDir == "" {
 		cfg.RunsDir = filepath.Join(*demoDir, "runs")

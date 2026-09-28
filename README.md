@@ -59,7 +59,8 @@ And its limits, which shaped this fork:
 - **It reacts to words, not meaning.** "stationary" outscores "continues", and "collects weapon (power up)" reads as
   *negative*. Rewording can fix a specific bias, but the effect of a phrase flips sign between contexts.
 - **It can't choose goals.** Asked to pick between "return to center", "collect the weapon" and "stay" from facts
-  (numeric or plain-language), it scored at chance, so it rarely detours for pickups.
+  (numeric or plain-language), it scored at chance. Nearby pickups are therefore collected by a game rule (the
+  magnet), not by the model detouring for them.
 
 ## The jev strategy: observe, forecast, label, decide, execute
 
@@ -134,7 +135,7 @@ The remaining words are facts for choosing within a tier: clear follow-ups (`esc
 ## Results
 
 Lockstep simulation (game time pauses while a decision is in flight; answers apply 30 ms after the observation),
-8 seeds × 60 s:
+8 seeds × 60 s, measured before the pickup magnet, escort auto-aim and new weapons (engine v10):
 
 | Upstream | dense-mid-speed | hardest | A→B→A flicker |
 | --- | --- | --- | --- |
@@ -152,14 +153,21 @@ older engine); the setups differ, so the numbers aren't directly comparable.
 ## Game mechanics
 
 - **Pickups** float through the lower play area and fade over the last 2 s of a 14 s life: **B** bomb charge,
-  **W** weapon upgrade, **F** escort jet. They are collected by flying into them; the move labels say
-  `collects …` or `toward …`, and the model decides whether to go.
-- **Weapon levels** (W pickups, up to level 3): the gun fires 1, 3, 5, 5 spread shots, missile salvos grow
-  1, 2, 3, 3, and the missile cap rises from 4 to 6.
+  **W** weapon upgrade, **F** escort jet. A **magnet** pulls any pickup whose centre comes within 110 px of the
+  ship centre (starting at 180 px/s, ramping to 280 px/s), so it is collected without flying onto it. The move
+  labels say `collects …` when the move brings the ship within that radius, or `toward …`, and the model decides
+  whether to go.
+- **Weapon levels** (W pickups, up to level 5, cumulative): levels 0–2 fire 1-, 3- and 5-way spreads with missile
+  salvos of 1, 2, 3; level 3 adds **rapid fire** (gun cooldown ×0.5); level 4 adds **explosive shells** (a gun
+  shot bursts on hit: every other ship whose hull is within 44 px takes 1 damage, the boss included but never
+  killed outright, and enemy bullets inside the radius are cleared); level 5 adds the **missile swarm** (8 fanned
+  missiles per salvo). The missile cap is 4, 5, 6, 6, 6, 8 by level, plus one per escort missile slot; a salvo
+  including escort missiles never exceeds 8.
 - **Homing missiles** launch automatically while the model's fire answer is `shoot`, steer toward a predicted
   intercept, and re-target when their target dies.
-- **Escort jets** (up to 8) ring the ship, each facing its own direction, and fire outward with every volley while
-  the ring orbits; their shots also destroy enemy bullets. A hit on the ship costs one jet; with no bombs left, a
+- **Escort jets** (up to 8) ring the ship and fire every 0.17 s while the fire answer is `shoot`. Each shot aims
+  at the nearest enemy ship or enemy missile within 380 px of that jet, leading it; with none in range it flies
+  along the jet's outward facing. Their shots also destroy enemy bullets. A hit on the ship costs one jet; with no bombs left, a
   detonate decision sacrifices a jet for the same blast.
 - **Bombs** start at 3 charges (max 6). A detonation destroys every enemy bullet and ship within 200 px; the boss
   takes 20 damage instead. The model decides when, from ranked hold/detonate labels.
@@ -169,14 +177,20 @@ older engine); the setups differ, so the numbers aren't directly comparable.
 
 ## Controls
 
-The run starts on autopilot, with Julia flying.
+The page opens on an intro screen; nothing runs (no trace, no model call) until you pick **Start autopilot
+(Julia)** (or press Enter) or **Fly manually** (or M). `?autostart=1` skips the intro and starts the autopilot
+run at once (`?autostart=manual` starts a manual run); the **Restart run** button also dismisses the intro.
 
 | Input | Action |
 | --- | --- |
-| Arrow keys / WASD | fly manually (takes over from the autopilot) |
-| Space | pause / resume |
-| **Auto pilot** button | switch between Julia and manual flight |
-| **Restart run** button | start a new run |
+| Arrow keys / WASD | fly manually at 280 px/s (takes over from the autopilot) |
+| J / Z (hold) | fire gun, homing missiles and escort jets |
+| B / X | detonate a bomb (or sacrifice a jet when out of bombs) |
+| P / Tab, **Auto pilot** button | switch between Julia and manual flight |
+| Space / Esc | pause / resume |
+| R, **Restart run** button | start a new run |
+| H / ?, **? Controls** button | show the controls guide |
+| Touch (manual mode) | on-screen D-pad plus FIRE and BOMB buttons |
 | Threat level sliders | change bullet density, enemy density, fast-bullet share and speed |
 
 Manual input, pausing, restarting or changing difficulty marks the run as not benchmark-qualified.
@@ -184,7 +198,8 @@ Manual input, pausing, restarting or changing difficulty marks the run as not be
 ## Run locally
 
 Requirements: a modern browser, Go 1.22+ for the bridge, Node.js 22 for the offline tests, and a `/v1/systemone`
-server that supports `option_questions`. The Julia API used here (`julia-api`, a Go port of the Laya API with a
+server. The default is a local Julia API that supports `option_questions`; other providers can be chosen in the
+page (see below). The Julia API used here (`julia-api`, a Go port of the Laya API with a
 Python worker holding Julia 1) is a separate local project and is **not included** in this repository.
 
 ```bash
@@ -199,7 +214,28 @@ cp .env.example .env   # set DJEV_URL=http://127.0.0.1:8011 and DJEV_MODEL=julia
 go run ./demo/bridge --host 127.0.0.1 --port 7866
 ```
 
-Open http://127.0.0.1:7866/. Keep the bridge on loopback; the browser never sees the upstream API key.
+Open http://127.0.0.1:7866/. Keep the bridge on loopback: it holds any API key for the upstream.
+
+### Choosing the decision API
+
+The **⚙ API** button (it shows the active model) opens the provider settings. Changes apply to a new run.
+
+| Preset | Base URL | Model | Request format |
+| --- | --- | --- | --- |
+| **Local Julia 1** (default) | `http://127.0.0.1:8011` | `julia-1` | `julia`: two judgements per move (`option_questions`), `samples`/`steps` = 1 |
+| Local Laya | `http://127.0.0.1:8012` | `typed-decisions` | `laya`: plain typed questions (laya-api rejects the other fields) |
+| djev-spark | `http://127.0.0.1:8000` | `jev-latest` | `djev`: `samples`/`steps` = 1 |
+| Custom… | any http(s) base URL | any | any of the three |
+
+- The bridge appends `/v1/systemone`; a URL with credentials, a query, or the full API path is rejected.
+- **API key** (optional): sent only to this local bridge with the run start, kept in memory for that run's upstream
+  calls, and never logged, written to traces, returned to the page or stored in the browser. Leave it blank to use
+  the server's `DJEV_API_KEY`, which the bridge only sends to the server's own endpoint (`DJEV_URL`), never to a
+  URL chosen in the page.
+- The non-secret choice is remembered in the browser (localStorage); **Server default** clears it.
+- `GET /api/provider` returns the presets and the server default (with `has_server_key`, never the key). Each run's
+  trace records the provider, endpoint, model and request format. `DJEV_FLAVOR` sets the default format
+  (`julia` if unset).
 
 ### Event-log detail view
 

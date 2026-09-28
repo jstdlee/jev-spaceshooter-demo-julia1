@@ -103,6 +103,7 @@
     #hud-lives { color:var(--r); font:17px/.7 var(--crt); letter-spacing:.1em; padding-bottom:1px; }
     #hud-bombs { color:var(--o); font:17px/.7 var(--crt); letter-spacing:.1em; padding-bottom:1px; }
     #hud-weapon, #hud-missiles, #hud-pickups, #hud-run { font:17px/.7 var(--crt); color:var(--s); padding-bottom:1px; }
+    #hud-weapon { font-size:15px; letter-spacing:-.02em; }
     .controls { display:flex; flex-wrap:wrap; align-items:center; gap:5px; }
     button { font:8px/1 var(--pixel); letter-spacing:.02em; text-transform:uppercase; color:var(--k); background:var(--c);
       border:0; padding:8px 5px; min-height:28px; cursor:pointer; box-shadow:inset -2px -2px 0 rgba(0,0,0,.4), inset 2px 2px 0 rgba(255,255,255,.45), 0 0 0 2px var(--k); }
@@ -190,11 +191,73 @@
       padding:8px; font:16px/1.05 var(--crt); color:var(--l); white-space:pre-wrap; overflow-wrap:anywhere; }
     .exchange-dialog button { background:var(--y); color:var(--k); padding:6px 8px; min-height:0; }
     .exchange-head button { background:var(--k); color:var(--c); }
+
+    /* API provider settings dialog */
+    .provider-dialog { width:min(560px,calc(100vw - 32px)); padding:0; color:var(--s); font:17px/1.15 var(--crt); background:var(--hull); border:0;
+      box-shadow:0 0 0 2px var(--k), 0 0 0 4px var(--y), 0 0 0 6px var(--k), 8px 8px 0 6px rgba(0,0,0,.6); }
+    .provider-dialog::backdrop { background:rgba(0,0,0,.7); }
+    .provider-dialog .exchange-head { background:var(--y); }
+    .provider-form { display:grid; gap:10px; padding:12px; }
+    .provider-form label { display:grid; gap:4px; font:8px/1 var(--pixel); text-transform:uppercase; color:var(--y); }
+    .provider-form input, .provider-form select { font:18px/1 var(--crt); color:var(--l); background:var(--k); border:0; box-shadow:inset 0 0 0 2px var(--d); padding:6px 8px; min-height:36px; width:100%; box-sizing:border-box; }
+    .provider-form input:focus, .provider-form select:focus { outline:none; box-shadow:inset 0 0 0 2px var(--c); }
+    .provider-note { color:var(--g); font:16px/1.15 var(--crt); margin:0; }
+    .provider-status { min-height:1.2em; color:var(--o); font:16px/1.15 var(--crt); margin:0; overflow-wrap:anywhere; }
+    .provider-actions { display:flex; gap:8px; justify-content:flex-end; flex-wrap:wrap; }
+    .provider-actions button { background:var(--e); color:var(--k); padding:8px 10px; }
+    .provider-actions button.secondary { background:var(--d); color:var(--s); }
     .ok { color:var(--l)!important; } .warn { color:var(--y)!important; } .bad { color:var(--r)!important; }
     .history-item.ok, .history-item.warn, .history-item.bad { color:var(--g)!important; }
     .history-item.ok { border-left-color:var(--e); } .history-item.warn { border-left-color:var(--o); } .history-item.bad { border-left-color:var(--r); }
     .http-warning { display:none; width:100%; color:var(--y); font:15px/.95 var(--crt); padding:3px 5px; background:var(--k); box-shadow:inset 0 0 0 2px var(--o); }
     .http-warning.show { display:block; }
+
+    /* Attract / intro screen and the controls guide: full-viewport CRT overlays (outside the zoomed shell). */
+    .overlay { position:fixed; inset:0; z-index:40; display:none; align-items:center; justify-content:center; padding:16px;
+      background:
+        repeating-linear-gradient(0deg, rgba(0,0,0,.35) 0 1px, transparent 1px 3px),
+        radial-gradient(ellipse at 50% 40%, rgba(31,42,122,.55), rgba(0,0,0,.86) 75%); }
+    .overlay.show { display:flex; }
+    .overlay-card { position:relative; width:min(780px,100%); max-height:100%; overflow:auto; padding:22px 26px 20px; color:var(--s);
+      background:var(--hull); box-shadow:0 0 0 2px var(--k), 0 0 0 4px var(--c), 0 0 0 6px var(--k), 8px 8px 0 6px rgba(0,0,0,.6);
+      scrollbar-width:thin; scrollbar-color:var(--d) var(--k); }
+    .overlay-card::after { content:""; position:absolute; inset:0; pointer-events:none; background:repeating-linear-gradient(0deg, rgba(0,0,0,.18) 0 1px, transparent 1px 3px); }
+    .intro-eyebrow { font:8px/1.4 var(--pixel); color:var(--c); letter-spacing:.1em; text-transform:uppercase; text-align:center; }
+    .intro-title { margin:10px 0 14px; text-align:center; font:clamp(16px,3.4vw,28px)/1.25 var(--pixel); color:var(--y); text-transform:uppercase;
+      text-shadow:3px 3px 0 var(--r), 6px 6px 0 var(--k); }
+    .intro-title span { color:var(--c); text-shadow:3px 3px 0 var(--b), 6px 6px 0 var(--k); white-space:nowrap; }
+    .intro-rainbow { height:4px; margin:0 0 14px; background:repeating-linear-gradient(90deg,var(--r) 0 24px,var(--o) 24px 48px,var(--y) 48px 72px,var(--l) 72px 96px,var(--c) 96px 120px,var(--p) 120px 144px,var(--m) 144px 168px); }
+    .intro-text { margin:0 0 12px; font:20px/1.05 var(--crt); color:var(--s); }
+    .intro-text b { color:var(--l); font-weight:400; }
+    .intro-h { margin:14px 0 8px; padding:3px 6px; font:8px/1 var(--pixel); letter-spacing:.06em; text-transform:uppercase; color:var(--k); background:var(--o); display:inline-block; }
+    .intro-h.guide-h { background:var(--c); }
+    .legend { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:6px 14px; }
+    .legend > div { display:grid; grid-template-columns:40px minmax(0,1fr); gap:8px; align-items:center; font:18px/1 var(--crt); }
+    .legend canvas { width:36px; height:36px; image-rendering:pixelated; background:var(--k); box-shadow:inset 0 0 0 2px var(--d); }
+    .legend b { color:var(--y); font-weight:400; }
+    .legend .magnet-icon { width:36px; height:36px; display:grid; place-items:center; background:var(--k); box-shadow:inset 0 0 0 2px var(--d); color:var(--c); font:12px var(--pixel); }
+    .keys { display:grid; grid-template-columns:auto minmax(0,1fr); gap:5px 12px; align-items:center; font:18px/1 var(--crt); }
+    .keys kbd { font:8px/1 var(--pixel); color:var(--k); background:var(--s); padding:5px 6px; box-shadow:inset -2px -2px 0 rgba(0,0,0,.35), 0 0 0 2px var(--k); white-space:nowrap; justify-self:start; }
+    .keys .touch-note { grid-column:1 / -1; color:var(--g); }
+    .intro-buttons { display:flex; flex-wrap:wrap; gap:12px; justify-content:center; margin:18px 0 10px; }
+    .intro-buttons button { font-size:10px; padding:12px 14px; min-height:44px; }
+    #intro-auto { background:var(--l); } #intro-manual { background:var(--y); }
+    .press-enter { text-align:center; font:10px/1 var(--pixel); color:var(--y); animation:blink 1s steps(2) infinite; margin-top:4px; }
+    .overlay-foot { margin-top:10px; text-align:center; color:var(--g); font:16px/1 var(--crt); }
+    .guide-close { position:absolute; top:10px; right:10px; z-index:1; background:var(--k); color:var(--c); }
+    #guide-button { background:var(--s); }
+
+    /* Touch controls: only in manual mode on touch devices. Over the arena corners on the desktop frames, below it on phones. */
+    .touch-pad { display:none; }
+    .touch-pad.show { display:flex; position:absolute; left:10px; right:10px; bottom:10px; z-index:5; justify-content:space-between; align-items:flex-end; pointer-events:none; }
+    .dpad { display:grid; grid-template-columns:repeat(3,56px); grid-template-rows:repeat(3,56px); gap:4px; pointer-events:auto; }
+    .dpad button, .touch-actions button { min-height:0; padding:0; font:14px/1 var(--pixel); background:rgba(0,216,255,.55); color:var(--k); touch-action:none; user-select:none; -webkit-user-select:none; }
+    .dpad button.hole { visibility:hidden; }
+    .touch-actions { display:flex; gap:10px; pointer-events:auto; }
+    .touch-actions button { width:84px; height:84px; font-size:10px; }
+    .touch-actions #touch-fire { background:rgba(255,42,77,.75); color:var(--w); }
+    .touch-actions #touch-bomb { background:rgba(255,140,26,.75); }
+    .dpad button.on, .touch-actions button.on { background:var(--w); }
 
     /* Phones and small tablets: one column, 14 px gutter, 40 px+ tap targets. */
     @media (max-width:760px) {
@@ -224,6 +287,13 @@
       .history-item[data-seq] { min-height:40px; }
       .exchange-body { grid-template-columns:1fr; }
       .exchange-dialog button { min-height:40px; }
+      .touch-pad.show { position:static; margin-top:10px; }
+      .dpad { grid-template-columns:repeat(3,60px); grid-template-rows:repeat(3,60px); }
+      .overlay { padding:10px; align-items:flex-start; }
+      .overlay-card { padding:16px 14px 14px; }
+      .intro-text { font-size:18px; }
+      .legend { grid-template-columns:minmax(0,1fr); }
+      .intro-buttons button { flex:1 1 100%; }
     }
   </style>
 </head>
@@ -243,6 +313,14 @@
     </header>
     <section id="game-panel">
       <div class="arena"><canvas id="game" width="1200" height="775" aria-label="Space shooter arena"></canvas></div>
+      <div id="touch-pad" class="touch-pad" aria-label="Touch controls">
+        <div class="dpad">
+          <button type="button" data-dirs="up left" aria-label="Up left">↖</button><button type="button" data-dirs="up" aria-label="Up">↑</button><button type="button" data-dirs="up right" aria-label="Up right">↗</button>
+          <button type="button" data-dirs="left" aria-label="Left">←</button><button type="button" class="hole" tabindex="-1" aria-hidden="true"></button><button type="button" data-dirs="right" aria-label="Right">→</button>
+          <button type="button" data-dirs="down left" aria-label="Down left">↙</button><button type="button" data-dirs="down" aria-label="Down">↓</button><button type="button" data-dirs="down right" aria-label="Down right">↘</button>
+        </div>
+        <div class="touch-actions"><button type="button" id="touch-bomb">Bomb</button><button type="button" id="touch-fire">Fire</button></div>
+      </div>
     </section>
     <section class="console" aria-label="Cockpit console">
       <div class="pod pod-hud">
@@ -265,6 +343,8 @@
           <button id="autopilot-button">Auto pilot: ON</button>
           <button id="pause-button">Pause</button>
           <button id="restart-button">Restart run</button>
+          <button id="guide-button" aria-haspopup="dialog">? Controls</button>
+          <button id="provider-button" aria-haspopup="dialog" title="Choose the decision API (provider, model, API key)">⚙ API: default</button>
           <span id="http-warning" class="http-warning">This page is open as a local file, so djev and trace HTTP endpoints are unreachable. Serve it from the bridge URL for model-controlled evidence; local file play remains neutral hold plus cease.</span>
           <span class="sub">Manual input, pause, reset, difficulty changes, or lag invalidate benchmark qualification for the active run.</span>
         </div>
@@ -320,6 +400,62 @@
       </div>
     </section>
   </main>
+  <div id="intro" class="overlay" role="dialog" aria-modal="true" aria-labelledby="intro-title">
+    <div class="overlay-card">
+      <div class="intro-eyebrow">Julia 1 autopilot · 1 player · insert coin</div>
+      <h2 id="intro-title" class="intro-title">Jev Strike <span>// Space Shooter</span></h2>
+      <div class="intro-rainbow"></div>
+      <p class="intro-text">An AI decision model, <b>Julia 1</b>, flies this ship. About every 50 ms the game reports what each of the nine moves would lead to; the model picks the move, whether to fire, and whether to bomb, and the game just executes that choice.</p>
+      <p class="intro-text">Survive the waves, collect the drifting supply blocks, and watch the nav computer below to see what the model saw.</p>
+      <div class="intro-h">Pickups &amp; weapons</div>
+      <div class="legend">
+        <div><canvas class="legend-sprite" data-sprite="weapon" data-tint="Y" width="36" height="36"></canvas><span><b>W weapon</b> upgrades: spread → rapid → splash → 8-missile swarm</span></div>
+        <div><canvas class="legend-sprite" data-sprite="bomb" data-tint="O" width="36" height="36"></canvas><span><b>B bomb</b> charge: clears bullets and ships nearby</span></div>
+        <div><canvas class="legend-sprite" data-sprite="wingman_pickup" data-tint="W" width="36" height="36"></canvas><span><b>F escort jet</b>: orbits the ship and auto-aims its shots</span></div>
+        <div><span class="magnet-icon" aria-hidden="true">(·)</span><span><b>Magnet</b> pulls nearby pickups in; no need to touch them</span></div>
+      </div>
+      <div class="intro-h guide-h">Manual controls</div>
+      <div class="keys" id="intro-keys"></div>
+      <div class="intro-buttons">
+        <button type="button" id="intro-auto">Start autopilot (Julia)</button>
+        <button type="button" id="intro-manual">Fly manually</button>
+      </div>
+      <div class="press-enter">Press Enter</div>
+      <div class="overlay-foot">Enter = autopilot · M = fly manually · manual input marks the run as not benchmark-qualified</div>
+    </div>
+  </div>
+  <div id="guide" class="overlay" role="dialog" aria-modal="true" aria-labelledby="guide-title">
+    <div class="overlay-card">
+      <button type="button" class="guide-close" id="guide-close">Close</button>
+      <div class="intro-eyebrow">Press H or ? anytime</div>
+      <h2 id="guide-title" class="intro-title" style="font-size:18px">Controls</h2>
+      <div class="keys" id="guide-keys"></div>
+      <div class="intro-h">Pickups</div>
+      <p class="intro-text" style="font-size:18px">W weapon: spread → rapid → splash → 8-missile swarm · B bomb charge · F escort jet · the magnet pulls nearby pickups in.</p>
+      <div class="overlay-foot">Manual input, pause, and restart mark the run as not benchmark-qualified.</div>
+    </div>
+  </div>
+    <dialog id="provider-dialog" class="provider-dialog" aria-labelledby="provider-title">
+      <div class="exchange-head"><h3 id="provider-title">Decision API</h3><button type="button" id="provider-close">Close</button></div>
+      <form id="provider-form" class="provider-form" method="dialog" autocomplete="off">
+        <label>Provider<select id="provider-preset"></select></label>
+        <label>Base URL<input id="provider-url" type="url" inputmode="url" spellcheck="false" placeholder="http://127.0.0.1:8011" required /></label>
+        <label>Model<input id="provider-model" type="text" spellcheck="false" maxlength="128" required /></label>
+        <label>Request format<select id="provider-flavor">
+          <option value="julia">Julia API: two judgements per move (option_questions)</option>
+          <option value="djev">djev: samples/steps = 1</option>
+          <option value="laya">Laya API: plain typed questions</option>
+        </select></label>
+        <label>API key<input id="provider-key" type="password" spellcheck="false" maxlength="1024" placeholder="optional" /></label>
+        <p class="provider-note">The bridge appends <b>/v1/systemone</b>. The key goes only to this local bridge, is kept in memory for the run, and is never logged or shown again. Leave it blank to use the server's key, which is only sent to the server's own endpoint.</p>
+        <p id="provider-status" class="provider-status" role="status"></p>
+        <div class="provider-actions">
+          <button type="button" id="provider-reset" class="secondary">Server default</button>
+          <button type="button" id="provider-cancel" class="secondary">Cancel</button>
+          <button type="submit" id="provider-apply">Apply &amp; restart</button>
+        </div>
+      </form>
+    </dialog>
     <dialog id="exchange-dialog" class="exchange-dialog" aria-labelledby="exchange-title">
       <div class="exchange-head"><h3 id="exchange-title">API exchange</h3><button type="button" id="exchange-close">Close</button></div>
       <div id="exchange-meta" class="exchange-meta"></div>
@@ -333,7 +469,7 @@
   (() => {
     "use strict";
 
-    const ENGINE_VERSION = "space-decision-core-v10";
+    const ENGINE_VERSION = "space-decision-core-v11";
     const DT_MS = 1000 / 60;
     const DT_SECONDS = 1 / 60;
     const WIDTH = 960;
@@ -363,20 +499,39 @@
     const HARDEST_DIFFICULTY = Object.freeze({ bulletDensity:4, enemyDensity:3, fastBulletRatio:.85, fastBulletSpeed:2.4 });
     const PRNG_VERSION = "xorshift32-v1";
     // Homing missiles launch automatically while a Djev command authorizes the gun.
-    // Missile cap grows with weapon level: 4 at level 0 up to 6.
-    const MISSILE = Object.freeze({ speed:420, turn_rate:6, damage:1, lifetime_s:2.5, launch_interval_s:.5, max_active:4, max_active_top:6, box:{ w:8, h:14 } });
+    // Missile cap grows with weapon level (max_active + WEAPON.missile_cap_bonus_by_level): 4 at level 0,
+    // 6 at levels 2-4, and max_active_top = 8 with the level 5 missile swarm.
+    const MISSILE = Object.freeze({ speed:420, turn_rate:6, damage:1, lifetime_s:2.5, launch_interval_s:.5, max_active:4, max_active_top:8, box:{ w:8, h:14 } });
     // Each bomb destroys every enemy bullet and enemy ship within the radius; Djev decides when.
     const BOMB = Object.freeze({ charges:3, max_charges:6, radius_px:200 });
-    // Weapon level from collected weapon blocks: gun spread widens and the missile cap rises.
-    const WEAPON = Object.freeze({ max_level:3, spread_by_level:[1, 3, 5, 5], spread_step_rad:.16, missile_salvo_by_level:[1, 2, 3, 3], salvo_fan_rad:.55 });
+    // Weapon level from collected weapon blocks (each block is +1, upgrades are cumulative):
+    //   0-2  gun spread 1 / 3 / 5 ways, missile salvo 1 / 2 / 3;
+    //   3    rapid fire: gun cooldown x rapid_cooldown_scale (0.5);
+    //   4    explosive shells: a player gun shot bursts on hit, and everything inside splash_radius_px takes
+    //        splash_damage (bosses included, no instant kill) and enemy bullets inside the radius are cleared;
+    //   5    missile swarm: 8 missiles per salvo, fanned over swarm_fan_rad each side and launched in parallel.
+    // A salvo (ship plus escort-jet missile slots) never exceeds salvo_total_max missiles.
+    const WEAPON = Object.freeze({ max_level:5, spread_by_level:[1, 3, 5, 5, 5, 5], spread_step_rad:.16, missile_salvo_by_level:[1, 2, 3, 3, 3, 8],
+      missile_cap_bonus_by_level:[0, 1, 2, 2, 2, 4], salvo_fan_rad:.55, swarm_fan_rad:1.05, salvo_total_max:8,
+      rapid_from_level:3, rapid_cooldown_scale:.5, splash_from_level:4, splash_radius_px:44, splash_damage:1, swarm_from_level:5 });
     // Pickups float through the lower play area (away from the enemy formation) and are collected by flying into them.
+    // Magnet: a pickup whose centre comes within magnet_radius_px of the ship centre is captured and pulled toward the ship,
+    // its pull speed starting at magnet_min_speed_px_s and ramping up by magnet_accel_px_s2 to magnet_speed_px_s, so a pickup
+    // next to the ship is collected without steering onto it. The starting pull (180) beats ship speed plus drift (112 + 55),
+    // so a captured pickup always reaches the ship, whatever the ship does next. The forecast counts a move as collecting a
+    // pickup when its path comes within magnet_radius_px - magnet_forecast_margin_px (tick sampling margin).
     const PICKUP = Object.freeze({ box:{ w:24, h:24 }, lifetime_s:14, fade_s:2, speed:55, y_min:260, y_max:560,
+      magnet_radius_px:110, magnet_min_speed_px_s:180, magnet_speed_px_s:280, magnet_accel_px_s2:900, magnet_reach_s:.6, magnet_forecast_margin_px:4,
       spawn_interval_s:{ bomb:11, weapon:17, wingman:16 }, first_spawn_s:{ bomb:6, weapon:9, wingman:14 } });
     // Up to eight little escort jets ring the ship, each facing its own direction (degrees, 0 = right, 90 = down).
     // Their shots destroy enemies and also enemy bullets and missiles; the first two add a missile to each salvo.
-    // The ring orbits the ship at orbit_rad_s, so the outward shots sweep every direction.
+    // The ring orbits the ship at orbit_rad_s. Escorts fire (only while the fire answer is shoot) every fire_interval_s,
+    // on their own clock so the ship's rapid fire does not change it. Each shot auto-aims at the nearest enemy ship or
+    // enemy missile within aim_range_px of that jet, leading it (intercept at shot_speed); with none in range it flies
+    // along the jet's outward facing.
     // With no bombs left, a detonate decision sacrifices one jet for the same blast.
-    const WINGMAN = Object.freeze({ max:8, radius:40, slot_angles_deg:[180, 0, 225, 315, 135, 45, 270, 90], shot_speed:520, missile_slots:2, orbit_rad_s:1.6 });
+    const WINGMAN = Object.freeze({ max:8, radius:40, slot_angles_deg:[180, 0, 225, 315, 135, 45, 270, 90], shot_speed:520, missile_slots:2, orbit_rad_s:1.6,
+      fire_interval_s:.17, aim_range_px:380 });
     // A boss appears at random times, parks near the top, and saturates the arena with bullet rings, aimed fans, and homing missiles.
     const BOSS = Object.freeze({ hp:45, w:96, h:58, score:500, station_y:95, speed:70, first_s:[40, 60], interval_s:[35, 55], bomb_damage:20,
       ring:{ count:14, interval_s:2.4, speed:150 }, fan:{ count:7, spread_rad:1, interval_s:1.8, speed:190 }, missiles:{ count:2, interval_s:4.5 } });
@@ -555,6 +710,7 @@
         weaponLevel: 0,
         wingmen: 0,
         wingPhase: 0,
+        wingClock_s: 0,
         enemyMissiles: [],
         boss: { clock_s:null, active_id:null },
         pickups: [],
@@ -596,6 +752,9 @@
           bossesDestroyed: 0,
           enemyMissilesFired: 0,
           enemyMissilesDestroyed: 0,
+          splashBursts: 0,
+          splashKills: 0,
+          splashBulletsCleared: 0,
         },
       };
       startWave(game);
@@ -838,6 +997,11 @@
       return segments;
     }
 
+    // Gun cooldown at a weapon level: rapid fire (level 3+) scales it by WEAPON.rapid_cooldown_scale.
+    function gunCooldownS(level) {
+      return PLAYER_COOLDOWN_S * (level >= WEAPON.rapid_from_level ? WEAPON.rapid_cooldown_scale : 1);
+    }
+
     function cooldownAfterPrefix(game, expectedDelayMs, activeCommand) {
       let cooldownMs = Math.max(0, game.player.cooldown_s * 1000);
       const activeFireUntil = activeCommand && activeCommand.fire === "shoot" ? Math.min(expectedDelayMs, Math.max(0, activeCommand.remaining_ms || 0)) : 0;
@@ -846,7 +1010,7 @@
         const step = Math.min(DT_MS, expectedDelayMs - elapsed);
         cooldownMs = Math.max(0, cooldownMs - step);
         elapsed += step;
-        if (elapsed <= activeFireUntil + 1e-9 && cooldownMs <= 0) cooldownMs = PLAYER_COOLDOWN_S * 1000;
+        if (elapsed <= activeFireUntil + 1e-9 && cooldownMs <= 0) cooldownMs = gunCooldownS(game.weaponLevel) * 1000;
       }
       return cooldownMs;
     }
@@ -937,7 +1101,7 @@
           const shotPoint = pointAtSegments(segments, nextTickMs);
           const eta = shotInterceptFrom(game, { x:shotPoint.x, y:shotPoint.y + PLAYER_MUZZLE_Y }, nextTickMs, horizonMs);
           if (eta !== null && (shotEtaMs === null || eta < shotEtaMs)) shotEtaMs = eta;
-          cooldownMs = PLAYER_COOLDOWN_S * 1000;
+          cooldownMs = gunCooldownS(game.weaponLevel) * 1000;
         }
       }
       const edges = edgeDistances(endpoint, arena);
@@ -992,7 +1156,23 @@
         : pickup.kind === "wingman" ? game.wingmen < WINGMAN.max : game.weaponLevel < WEAPON.max_level);
     }
 
-    // Which wanted pickup this move's path touches (linear pickup motion), or which one it closes in on.
+    // First time within the segment at which the pickup centre (linear motion) is within radius of the ship centre.
+    function radialContact(segment, target, radius) {
+      const r = relativeMotion(segment, target);
+      const c = r.rx * r.rx + r.ry * r.ry - radius * radius;
+      if (c <= 0) return segment.t0;
+      const a = r.vx * r.vx + r.vy * r.vy;
+      const b = 2 * (r.rx * r.vx + r.ry * r.vy);
+      if (a < 1e-12 || b >= 0) return null;
+      const disc = b * b - 4 * a * c;
+      if (disc < 0) return null;
+      const t = (-b - Math.sqrt(disc)) / (2 * a);
+      return t <= r.duration + 1e-12 ? segment.t0 + t : null;
+    }
+
+    // Which wanted pickup this move collects, or which one it closes in on. A move collects a pickup when its
+    // path brings the ship centre within PICKUP.magnet_radius_px of the pickup (linear pickup motion): from
+    // there the magnet pulls the pickup in faster than the ship can fly.
     function pickupForecast(game, movement, expectedDelayMs, activeCommand) {
       const wanted = wantedPickups(game);
       if (!wanted.length) return { collect:null, toward:null };
@@ -1000,10 +1180,11 @@
       const segments = buildForecastSegments(game, movement, "medium", expectedDelayMs, activeCommand, leaseEndMs);
       let collect = null;
       for (const pickup of wanted) {
-        const target = { x:pickup.x, y:pickup.y, vx:pickup.vx, vy:pickup.vy, w:PICKUP.box.w, h:PICKUP.box.h };
-        const half = { x:PLAYER_W / 2 + PICKUP.box.w / 2, y:PLAYER_H / 2 + PICKUP.box.h / 2 };
+        const target = { x:pickup.x, y:pickup.y, vx:pickup.vx, vy:pickup.vy };
         for (const segment of segments) {
-          const contact = sweptContact(segment, target, half);
+          let contact = radialContact(segment, target, PICKUP.magnet_radius_px - PICKUP.magnet_forecast_margin_px);
+          // The pull needs up to magnet_reach_s to bring the pickup in; one that expires first is not collected.
+          if (contact !== null && contact + PICKUP.magnet_reach_s >= PICKUP.lifetime_s - pickup.age_s) contact = null;
           // A weapon block wins over a bomb pickup on the same path: upgrading is the priority.
           const upgrade = (kind) => kind !== "bomb";
           const better = !collect || upgrade(pickup.kind) && !upgrade(collect.kind) || upgrade(pickup.kind) === upgrade(collect.kind) && contact < collect.at;
@@ -1161,7 +1342,11 @@
     }
 
     function missileCap(game) {
-      return Math.min(MISSILE.max_active_top, MISSILE.max_active + game.weaponLevel) + Math.min(game.wingmen, WINGMAN.missile_slots);
+      return shipMissileCap(game.weaponLevel) + Math.min(game.wingmen, WINGMAN.missile_slots);
+    }
+
+    function shipMissileCap(level) {
+      return Math.min(MISSILE.max_active_top, MISSILE.max_active + WEAPON.missile_cap_bonus_by_level[level]);
     }
 
     // Escort jets hold ring slots around the player (clamped to the arena) and face outward.
@@ -1191,19 +1376,49 @@
           vy: Math.cos(angle) * PLAYER_SHOT_SPEED,
           radius: PLAYER_SHOT_RADIUS,
           level: game.weaponLevel,
+          ...(game.weaponLevel >= WEAPON.rapid_from_level ? { rapid:true } : {}),
+          ...(game.weaponLevel >= WEAPON.splash_from_level ? { explosive:true } : {}),
           authorizedBy,
         };
         game.playerBullets.push(shot);
         game.counters.playerShots += 1;
         events.push({ type:"shot", tick:game.tick, entity_id:shot.id, decision_id:authorizedBy && authorizedBy.decision_id, sequence:authorizedBy && authorizedBy.sequence, x:shot.x, y:shot.y });
       }
+      game.player.cooldown_s = gunCooldownS(game.weaponLevel);
+    }
+
+    // Nearest enemy ship or enemy missile within WINGMAN.aim_range_px of an escort jet (ties by id).
+    function escortTarget(game, origin) {
+      let best = null;
+      const consider = (id, x, y, vx, vy) => {
+        const distance = Math.hypot(x - origin.x, y - origin.y);
+        if (distance > WINGMAN.aim_range_px) return;
+        if (!best || distance < best.distance || distance === best.distance && String(id) < String(best.id)) best = { id, x, y, vx, vy, distance };
+      };
+      for (const enemy of game.enemies) {
+        const v = enemyVelocity(game, enemy);
+        consider(enemy.id, enemy.x, enemy.y, v.vx, v.vy);
+      }
+      for (const missile of game.enemyMissiles) consider(missile.id, missile.x, missile.y, Math.cos(missile.heading) * ENEMY_MISSILE.speed, Math.sin(missile.heading) * ENEMY_MISSILE.speed);
+      return best;
+    }
+
+    // Escort shots are weapon physics: each jet leads its nearest target, or fires along its facing.
+    function emitWingmanShots(game, command, events) {
+      const authorizedBy = command ? { decision_id:command.decision_id, sequence:command.sequence, movement:command.movement, fire:command.fire, lease:command.lease, ...(command.intent == null ? {} : { intent:command.intent }) } : null;
       for (const wing of wingmanPositions(game)) {
-        const shot = { id:entityId(game, "pshot"), x:wing.x, y:wing.y, vx:Math.cos(wing.angle) * WINGMAN.shot_speed, vy:Math.sin(wing.angle) * WINGMAN.shot_speed, radius:PLAYER_SHOT_RADIUS - 1, level:game.weaponLevel, wingman:wing.slot, authorizedBy };
+        const target = escortTarget(game, wing);
+        let heading = wing.angle;
+        if (target) {
+          const t = interceptTime(wing, WINGMAN.shot_speed, target) ?? 0;
+          heading = Math.atan2(target.y + target.vy * t - wing.y, target.x + target.vx * t - wing.x);
+        }
+        const shot = { id:entityId(game, "pshot"), x:wing.x, y:wing.y, vx:Math.cos(heading) * WINGMAN.shot_speed, vy:Math.sin(heading) * WINGMAN.shot_speed, radius:PLAYER_SHOT_RADIUS - 1, level:game.weaponLevel, wingman:wing.slot, ...(target ? { aim_id:target.id } : {}), authorizedBy };
         game.playerBullets.push(shot);
         game.counters.playerShots += 1;
         events.push({ type:"shot", tick:game.tick, entity_id:shot.id, decision_id:authorizedBy && authorizedBy.decision_id, sequence:authorizedBy && authorizedBy.sequence, x:shot.x, y:shot.y });
       }
-      game.player.cooldown_s = PLAYER_COOLDOWN_S;
+      game.wingClock_s = WINGMAN.fire_interval_s;
     }
 
     function spawnPickup(game, kind, events) {
@@ -1239,10 +1454,22 @@
           events.push({ type:"pickup_expired", tick:game.tick, pickup_id:pickup.id, kind:pickup.kind });
           return false;
         }
+        // Magnet: a pickup whose centre comes within the radius of the ship centre is captured and stays captured;
+        // its pull speed starts at magnet_min_speed_px_s and ramps up toward magnet_speed_px_s.
+        const pulled = pickup.pull_px_s > 0 || Math.hypot(game.player.x - pickup.x, game.player.y - pickup.y) <= PICKUP.magnet_radius_px;
         pickup.x += pickup.vx * DT_SECONDS;
         pickup.y += pickup.vy * DT_SECONDS;
+        if (pulled) {
+          pickup.pull_px_s = pickup.pull_px_s > 0 ? Math.min(PICKUP.magnet_speed_px_s, pickup.pull_px_s + PICKUP.magnet_accel_px_s2 * DT_SECONDS) : PICKUP.magnet_min_speed_px_s;
+          const dx = game.player.x - pickup.x;
+          const dy = game.player.y - pickup.y;
+          const distance = Math.hypot(dx, dy);
+          const step = Math.min(distance, pickup.pull_px_s * DT_SECONDS);
+          if (distance > 0) { pickup.x += dx / distance * step; pickup.y += dy / distance * step; }
+        }
         if (pickup.x < arena.left || pickup.x > arena.right) { pickup.vx *= -1; pickup.x = clamp(pickup.x, arena.left, arena.right); }
-        if (pickup.y < PICKUP.y_min || pickup.y > PICKUP.y_max) { pickup.vy *= -1; pickup.y = clamp(pickup.y, PICKUP.y_min, PICKUP.y_max); }
+        // A captured pickup may leave the drift band to reach the ship.
+        if (!pulled && (pickup.y < PICKUP.y_min || pickup.y > PICKUP.y_max)) { pickup.vy *= -1; pickup.y = clamp(pickup.y, PICKUP.y_min, PICKUP.y_max); }
         if (!overlaps({ x:pickup.x, y:pickup.y, w:PICKUP.box.w, h:PICKUP.box.h }, game.player)) return true;
         applyPickup(game, pickup, events);
         return false;
@@ -1329,6 +1556,34 @@
       game.enemies.splice(index, 1);
     }
 
+    // Level 4+ gun shells burst where they hit: every other enemy ship whose hull is within WEAPON.splash_radius_px takes
+    // splash_damage (a boss only loses hp), and enemy bullets inside the radius are cleared.
+    function explodeShell(game, shot, hitEnemyId, events) {
+      const center = { x:shot.x, y:shot.y };
+      const inside = (thing) => Math.hypot(thing.x - center.x, thing.y - center.y) <= WEAPON.splash_radius_px;
+      const clearedBullets = game.enemyBullets.filter(inside).map((bullet) => bullet.id);
+      if (clearedBullets.length) game.enemyBullets = game.enemyBullets.filter((bullet) => !inside(bullet));
+      // Ships count from the nearest point of their hull box, so large ships (tanks, the boss) are not missed.
+      const hullInside = (enemy) => Math.hypot(Math.max(0, Math.abs(enemy.x - center.x) - enemy.w / 2), Math.max(0, Math.abs(enemy.y - center.y) - enemy.h / 2)) <= WEAPON.splash_radius_px;
+      const damaged = game.enemies.filter((enemy) => enemy.id !== hitEnemyId && hullInside(enemy)).map((enemy) => enemy.id);
+      const destroyed = [];
+      for (const id of damaged) {
+        const index = game.enemies.findIndex((enemy) => enemy.id === id);
+        if (index < 0) continue;
+        const enemy = game.enemies[index];
+        enemy.hp -= WEAPON.splash_damage;
+        events.push({ type:"enemy_damaged", tick:game.tick, enemy_id:enemy.id, shot_id:shot.id, hp:enemy.hp, source:"splash", decision_id:shot.authorizedBy && shot.authorizedBy.decision_id });
+        if (enemy.hp <= 0) {
+          destroyed.push(enemy.id);
+          destroyEnemyAt(game, index, events, "splash");
+        }
+      }
+      game.counters.splashBursts += 1;
+      game.counters.splashKills += destroyed.length;
+      game.counters.splashBulletsCleared += clearedBullets.length;
+      events.push({ type:"splash", tick:game.tick, shot_id:shot.id, x:center.x, y:center.y, radius_px:WEAPON.splash_radius_px, damaged_enemy_ids:damaged, destroyed_enemy_ids:destroyed, cleared_bullet_ids:clearedBullets });
+    }
+
     // Smallest positive time for a projectile at speed from origin to meet a constant-velocity target.
     function interceptTime(origin, speed, target) {
       const dx = target.x - origin.x;
@@ -1358,14 +1613,20 @@
     // Higher weapon levels fire a fanned salvo; each missile in a salvo takes a different target when it can.
     function launchMissile(game, command, events) {
       if (!command || command.fire !== "shoot" || !game.enemies.length || game.missileClock_s > 0) return;
-      const salvo = WEAPON.missile_salvo_by_level[game.weaponLevel];
+      // Escort missile slots keep their share; the ship's salvo gives way so the total stays within salvo_total_max.
+      const escortSlots = Math.min(game.wingmen, WINGMAN.missile_slots);
+      const salvo = Math.min(WEAPON.missile_salvo_by_level[game.weaponLevel], WEAPON.salvo_total_max - escortSlots);
+      const swarm = game.weaponLevel >= WEAPON.swarm_from_level;
+      // A classic salvo fans salvo_fan_rad per missile; the swarm spreads its missiles evenly over +-swarm_fan_rad.
+      const fanStep = swarm && salvo > 1 ? WEAPON.swarm_fan_rad / ((salvo - 1) / 2) : WEAPON.salvo_fan_rad;
+      const spacing = swarm ? 6 : 10;
       const taken = new Set();
       for (let i = 0; i < salvo && game.playerMissiles.length < missileCap(game); i += 1) {
         const offset = salvo > 1 ? (i - (salvo - 1) / 2) : 0;
-        const origin = { x:game.player.x + offset * 10, y:game.player.y - 12 };
+        const origin = { x:game.player.x + offset * spacing, y:game.player.y - 12 };
         const target = missileTarget(game, origin, taken);
         taken.add(target.enemy.id);
-        const missile = { id:entityId(game, "missile"), x:origin.x, y:origin.y, heading:-Math.PI / 2 + offset * WEAPON.salvo_fan_rad, age_s:0, target_id:target.enemy.id, decision_id:command.decision_id ?? null, slot:i };
+        const missile = { id:entityId(game, "missile"), x:origin.x, y:origin.y, heading:-Math.PI / 2 + offset * fanStep, age_s:0, target_id:target.enemy.id, decision_id:command.decision_id ?? null, slot:swarm ? 3 : Math.min(i, 2) };
         game.playerMissiles.push(missile);
         game.counters.missileLaunches += 1;
         events.push({ type:"missile_launch", tick:game.tick, missile_id:missile.id, target_id:missile.target_id, decision_id:missile.decision_id, salvo });
@@ -1602,7 +1863,9 @@
         events.push({ type:"movement", tick:game.tick, decision_id:command.decision_id, sequence:command.sequence, movement, model_movement:command.model_movement ?? movement, source:command.source || "djev", dx:displacement.dx, dy:displacement.dy, clamped:moved.wall_clamped });
       }
       game.player.cooldown_s -= DT_SECONDS;
+      game.wingClock_s = Math.max(0, (game.wingClock_s || 0) - DT_SECONDS);
       if (fire === "shoot" && game.player.cooldown_s <= 0 && command) emitPlayerShot(game, command, events);
+      if (fire === "shoot" && game.wingmen > 0 && game.wingClock_s <= 0 && command) emitWingmanShots(game, command, events);
       game.missileClock_s = Math.max(0, game.missileClock_s - DT_SECONDS);
       if (game.wingmen > 0) game.wingPhase = (game.wingPhase + WINGMAN.orbit_rad_s * DT_SECONDS) % (Math.PI * 2);
       launchMissile(game, command, events);
@@ -1647,6 +1910,7 @@
             enemy.hp -= 1;
             events.push({ type:"enemy_damaged", tick:game.tick, enemy_id:enemy.id, shot_id:shot.id, hp:enemy.hp, decision_id:shot.authorizedBy && shot.authorizedBy.decision_id });
             if (enemy.hp <= 0) destroyEnemyAt(game, j, events, "gun");
+            if (shot.explosive) explodeShell(game, shot, enemy.id, events);
             break;
           }
         }
@@ -1852,6 +2116,7 @@
         weaponLevel: game.weaponLevel,
         wingmen: game.wingmen,
         wingPhase: game.wingPhase,
+        wingClock_s: game.wingClock_s,
         enemyMissiles: game.enemyMissiles,
         boss: game.boss,
         pickups: game.pickups,
@@ -2244,10 +2509,19 @@
     let latencyHistory = [];
     let lastSelected = "none";
     let bombFlash = null;
+    let splashFx = [];
     let lastExecuted = "neutral · hold · cease";
     let nextRequestAllowedWallMs = 0;
     let difficulty = core.normalizeDifficulty({});
     const isFileProtocol = location.protocol === "file:";
+    // Intro (attract) screen: no run, trace, or API call exists until the player picks a mode.
+    let introActive = false;
+    let guideOpen = false;
+    let isTouchDevice = false;
+    // Manual play: held keys / touch buttons steer and fire; bomb presses queue one detonation each.
+    let manualBombRequests = 0;
+    let manualBombSerial = 0;
+    const touchState = { fire:false, dirs:new Map() };
 
     function wallMs(run = runState) {
       return performance.now() - (run ? run.startedPerf : runStartPerf);
@@ -2407,6 +2681,12 @@
         fastBulletSpeed:$("fast-bullet-speed").value,
       });
       syncDifficultyControls();
+      if (introActive) {
+        // No run yet: just refresh the attract-screen preview with the new difficulty.
+        game = core.createGame({ seed:20260920, difficulty });
+        lastObservation = currentObservation();
+        return;
+      }
       invalidateQualification("difficulty_changed");
       const result = djev.invalidateController(controller, "difficulty_changed");
       enqueueEvents(result.events);
@@ -2495,6 +2775,10 @@
         if (event.type === "pickup_collected") {
           addHistory("pickup", `${event.kind} pickup · ${event.before} → ${event.after}`, "ok");
         }
+        if (event.type === "splash") {
+          splashFx.push({ x:event.x, y:event.y, radius:event.radius_px, born:performance.now() });
+          if (splashFx.length > 24) splashFx = splashFx.slice(-24);
+        }
         if (event.type === "bomb_detonated") {
           bombFlash = { x:event.x, y:event.y, radius:event.radius_px, until:performance.now() + 450 };
           addHistory("bomb", `${event.source === "jet_sacrifice" ? "jet self-destruct" : "djev bomb"} · ${event.removed_bullet_ids.length} bullets · ${event.destroyed_enemy_ids.length} ships · ${event.charges_after} bombs, ${event.jets_after} jets left`, "ok");
@@ -2536,7 +2820,7 @@
         const response = await fetch("/api/run/start", {
           method:"POST",
           headers:{ "Content-Type":"application/json" },
-          body:JSON.stringify({ schema_version:1, manifest }),
+          body:JSON.stringify(providerChoice ? { schema_version:1, manifest, provider:providerChoice } : { schema_version:1, manifest }),
         });
         if (!response.ok) throw new Error(`run/start ${response.status}`);
         const data = await response.json();
@@ -2714,16 +2998,34 @@
       }
     }
 
+    const MOVE_KEYS = Object.freeze({ left:["arrowleft", "a"], right:["arrowright", "d"], up:["arrowup", "w"], down:["arrowdown", "s"] });
+    const FIRE_KEYS = Object.freeze(["j", "z"]);
+    const BOMB_KEYS = Object.freeze(["b", "x"]);
+
+    function manualHeld(direction) {
+      return MOVE_KEYS[direction].some((key) => keys.has(key)) || [...touchState.dirs.values()].some((dirs) => dirs.includes(direction));
+    }
+
+    // Manual flight moves the ship directly at manual speed; fire and bomb go through the same core
+    // command fields (fire: shoot, bomb: detonate) that a model command uses.
     function updateManual(dtSeconds) {
       invalidateQualification("manual_input");
       const arena = core.arenaFor(game);
-      const ax = (keys.has("arrowright") || keys.has("d") ? 1 : 0) - (keys.has("arrowleft") || keys.has("a") ? 1 : 0);
-      const ay = (keys.has("arrowdown") || keys.has("s") ? 1 : 0) - (keys.has("arrowup") || keys.has("w") ? 1 : 0);
+      const ax = (manualHeld("right") ? 1 : 0) - (manualHeld("left") ? 1 : 0);
+      const ay = (manualHeld("down") ? 1 : 0) - (manualHeld("up") ? 1 : 0);
       const mag = Math.hypot(ax, ay) || 1;
-      game.player.x = Math.max(arena.left, Math.min(arena.right, game.player.x + ax / mag * 280 * dtSeconds));
-      game.player.y = Math.max(arena.top, Math.min(arena.bottom, game.player.y + ay / mag * 280 * dtSeconds));
-      lastExecuted = `manual · ${((ax / mag) * 280 * dtSeconds).toFixed(1)},${((ay / mag) * 280 * dtSeconds).toFixed(1)}`;
-      const stepped = core.stepGame(game, null);
+      const speed = core.RULES.player.manual_speed;
+      game.player.x = Math.max(arena.left, Math.min(arena.right, game.player.x + ax / mag * speed * dtSeconds));
+      game.player.y = Math.max(arena.top, Math.min(arena.bottom, game.player.y + ay / mag * speed * dtSeconds));
+      const firing = FIRE_KEYS.some((key) => keys.has(key)) || touchState.fire;
+      const bombNow = manualBombRequests > 0;
+      if (bombNow) manualBombRequests -= 1;
+      const command = firing || bombNow ? {
+        movement:"hold", fire:firing ? "shoot" : "cease", bomb:bombNow ? "detonate" : "hold", lease:null, sequence:null, source:"manual",
+        decision_id:bombNow ? `manual-bomb-${++manualBombSerial}` : "manual",
+      } : null;
+      lastExecuted = `manual · ${((ax / mag) * speed * dtSeconds).toFixed(1)},${((ay / mag) * speed * dtSeconds).toFixed(1)} · ${firing ? "shoot" : "cease"}${bombNow ? " · bomb" : ""}`;
+      const stepped = core.stepGame(game, command);
       updateRecentFromEvents(stepped.events);
       enqueueEvents(stepped.events.filter((event) => event.type !== "terminal"));
       recordNeutralTick("manual");
@@ -2736,6 +3038,14 @@
     function update(now) {
       const frameDelta = Math.max(0, now - lastFrame);
       lastFrame = now;
+      if (introActive) {
+        // Attract mode: only the starfield drifts; the simulation has not started.
+        stars.forEach((star) => {
+          star.y += star.speed * Math.min(frameDelta, 100) / 1000;
+          if (star.y > H) { star.y = 0; star.x = random(0, W); }
+        });
+        return;
+      }
       if (paused || game.terminal || runState && runState.ending) return;
       if (frameDelta > MAX_LAG_MS) {
         invalidateQualification("scheduling_lag");
@@ -2772,11 +3082,13 @@
       $("hud-wave").textContent = game.wave;
       $("hud-score").textContent = game.score.toLocaleString();
       $("hud-lives").textContent = "♥".repeat(Math.max(0, game.player.lives)) + "♡".repeat(Math.max(0, game.player.maxLives - game.player.lives));
-      $("hud-run").textContent = runId || "starting";
+      $("hud-run").textContent = runId || (introActive ? "not started" : "starting");
       $("hud-elapsed").textContent = (game.sim_ms / 1000).toFixed(1) + " s";
-      $("hud-mode").textContent = game.terminal ? "ENDED" : paused ? "PAUSED" : autopilot ? "AUTO" : "MANUAL";
+      $("hud-mode").textContent = introActive ? "INTRO" : game.terminal ? "ENDED" : paused ? "PAUSED" : autopilot ? "AUTO" : "MANUAL";
+      $("touch-pad").classList.toggle("show", isTouchDevice && !autopilot && !introActive && !game.terminal);
       $("hud-bombs").textContent = "●".repeat(game.bomb.charges) + "○".repeat(Math.max(0, core.BOMB.max_charges - game.bomb.charges));
-      $("hud-weapon").textContent = `Lv ${game.weaponLevel} · ${core.WEAPON.spread_by_level[game.weaponLevel]}-way · ${core.WEAPON.missile_salvo_by_level[game.weaponLevel]}×salvo · ${Math.min(core.MISSILE.max_active_top, core.MISSILE.max_active + game.weaponLevel)} max`;
+      $("hud-weapon").textContent = weaponText(game.weaponLevel);
+      $("hud-weapon").title = $("hud-weapon").textContent;
       $("hud-pickups").textContent = `${game.counters.bombPickups} bomb · ${game.counters.weaponPickups} weapon · ${game.wingmen}/${core.WINGMAN.max} jets${game.boss.active_id ? " · BOSS" : ""}`;
       $("hud-missiles").textContent = `${game.playerMissiles.length} · ${game.counters.missileKills} kills`;
       $("selected").textContent = lastSelected;
@@ -2809,6 +3121,19 @@
       $("link-rate").textContent = `${completedRate.toFixed(1)} dec/s`;
       const peak = Math.max(250, ...latencyHistory);
       $("latency-spark").innerHTML = latencyHistory.map((ms) => `<i style="height:${Math.max(8, ms / peak * 100).toFixed(0)}%" title="${ms.toFixed(0)} ms"></i>`).join("");
+    }
+
+    // e.g. "Lv 4 · 5-way · rapid · splash · 3×salvo · 6 max"
+    function weaponText(level) {
+      const W_ = core.WEAPON;
+      return [
+        `Lv ${level}`,
+        `${W_.spread_by_level[level]}-way`,
+        ...(level >= W_.rapid_from_level ? ["rapid"] : []),
+        ...(level >= W_.splash_from_level ? ["splash"] : []),
+        `${W_.missile_salvo_by_level[level]}×salvo`,
+        `${Math.min(core.MISSILE.max_active_top, core.MISSILE.max_active + W_.missile_cap_bonus_by_level[level])} max`,
+      ].join(" · ");
     }
 
     const NAV_LAYOUT = [["up_left", "↖"], ["up", "↑"], ["up_right", "↗"], ["left", "←"], ["hold", "•"], ["right", "→"], ["down_left", "↙"], ["down", "↓"], ["down_right", "↘"]];
@@ -3056,6 +3381,29 @@
       if (t < .35) px(cx - 2 - blast.big, cy - 2 - blast.big, 5 + blast.big * 2, 5 + blast.big * 2, t < .15 ? "W" : "Y");
     }
 
+    // Explosive-shell burst: a white flash, then a stepped ring that expands to the splash radius
+    // through yellow, orange and red, with a sparse dithered fill inside.
+    const SPLASH_FX_MS = 320;
+    function drawSplash(fx, nowMs) {
+      const t = Math.min(1, (nowMs - fx.born) / SPLASH_FX_MS);
+      const cx = lx(fx.x);
+      const cy = lx(fx.y);
+      const radius = Math.max(2, Math.round(fx.radius / PIXEL * (.35 + .65 * Math.sqrt(t))));
+      const ramp = ["W", "Y", "O", "R"];
+      const color = ramp[Math.min(ramp.length - 1, Math.floor(t * ramp.length))];
+      if (t < .25) {
+        px(cx - 3, cy - 3, 7, 7, "Y");
+        px(cx - 2, cy - 2, 5, 5, "W");
+      }
+      const gap = t < .5 ? 3 : 5;
+      lctx.fillStyle = PALETTE[t < .5 ? "Y" : "O"];
+      for (let y = -radius + 1; y < radius; y += gap) {
+        const span = Math.floor(Math.sqrt(Math.max(0, radius * radius - y * y))) - 1;
+        for (let x = -span + ((y + radius) / gap % 2 ? 1 : 0); x <= span; x += gap) lctx.fillRect(cx + x, cy + y, 1, 1);
+      }
+      pixelRing(cx, cy, radius, color, t < .5 ? 2 : 1);
+    }
+
     function drawEnemyBullet(shot) {
       const x = lx(shot.x);
       const y = lx(shot.y);
@@ -3101,15 +3449,52 @@
       trackBlasts(nowMs);
 
       // Player gun: chunky bolts coloured by weapon level; escort-jet shots are smaller.
-      const shotColors = ["W", "L", "Y", "M"];
+      // Rapid fire (level 3) is a thin cyan needle with a white tip; explosive shells (level 4+) are round
+      // orange shells with a hot core and a red spark trail.
+      const shotColors = ["W", "L", "Y", "C", "O", "O"];
       game.playerBullets.forEach((shot) => {
         const x = lx(shot.x);
         const y = lx(shot.y);
         const color = shotColors[shot.level || 0];
-        if (shot.wingman !== undefined) { px(x - 1, y - 1, 2, 2, color); return; }
+        if (shot.wingman !== undefined) { px(x - 1, y - 1, 2, 2, shot.level >= 3 ? "L" : color); return; }
+        if (shot.explosive) {
+          const tx = -Math.sign(shot.vx || 0);
+          px(x - 1, y - 2, 3, 3, "O");
+          px(x, y - 1, 1, 1, blink ? "W" : "Y");
+          px(x + tx, y + 2, 1, 1, "R");
+          px(x + tx * 2, y + 4, 1, 1, blink ? "R" : "D");
+          return;
+        }
+        if (shot.rapid) {
+          px(x, y - 3, 1, 1, "W");
+          px(x, y - 2, 1, 4, "C");
+          px(x, y + 2, 1, 2, "T");
+          return;
+        }
         px(x - 1, y - 2, 2, 4, color);
         px(x - 1, y + 2, 2, 1, "T");
       });
+
+      // Magnet: a faint dotted ring at the pull radius, and a tractor beam of marching dots to each captured pickup.
+      {
+        const cx = lx(game.player.x);
+        const cy = lx(game.player.y);
+        const ringR = core.PICKUP.magnet_radius_px / PIXEL;
+        const phase = nowMs / 1400;
+        lctx.fillStyle = PALETTE.T;
+        for (let i = 0; i < 28; i += 1) {
+          const angle = i / 28 * Math.PI * 2 + phase;
+          lctx.fillRect(Math.round(cx + Math.cos(angle) * ringR), Math.round(cy + Math.sin(angle) * ringR), 1, 1);
+        }
+        game.pickups.forEach((pickup) => {
+          if (!(pickup.pull_px_s > 0)) return;
+          const dx = lx(pickup.x) - cx;
+          const dy = lx(pickup.y) - cy;
+          const steps = Math.max(1, Math.floor(Math.hypot(dx, dy) / 4));
+          const march = Math.floor(nowMs / 60) % 2;
+          for (let i = march; i < steps; i += 2) px(Math.round(cx + dx * i / steps), Math.round(cy + dy * i / steps), 1, 1, "C");
+        });
+      }
 
       game.pickups.forEach((pickup) => {
         // Fade over the last seconds of life instead of vanishing (quantised for a stepped arcade fade).
@@ -3125,7 +3510,7 @@
 
       game.enemyBullets.forEach(drawEnemyBullet);
 
-      const missileTints = ["O", "C", "M"];
+      const missileTints = ["O", "C", "M", "L"];
       game.playerMissiles.forEach((missile) => {
         blit(rotatedSprite("missile", missile.heading + Math.PI / 2, missileTints[missile.slot || 0]), missile.x, missile.y);
       });
@@ -3161,6 +3546,8 @@
         }
       });
       blasts.forEach((blast) => drawBlast(blast, nowMs));
+      splashFx = splashFx.filter((fx) => nowMs - fx.born < SPLASH_FX_MS);
+      splashFx.forEach((fx) => drawSplash(fx, nowMs));
 
       core.WINGMAN.slot_angles_deg.slice(0, game.wingmen).forEach((deg) => {
         const angle = deg * Math.PI / 180 + game.wingPhase;
@@ -3207,6 +3594,7 @@
     }
 
     async function restartRun(reason = "reset") {
+      if (introActive) hideIntro();
       if (runState && !runState.ending) {
         invalidateQualification(reason, runState);
         endRun("aborted", runState);
@@ -3295,21 +3683,235 @@
       requestAnimationFrame(frame);
     }
 
-    window.addEventListener("keydown", (event) => {
-      const key = event.key.toLowerCase();
-      if (["arrowleft","arrowright","arrowup","arrowdown","w","a","s","d"," "].includes(key)) event.preventDefault();
-      if (key === " ") setPaused(!paused);
-      else keys.add(key);
-    });
-    window.addEventListener("keyup", (event) => keys.delete(event.key.toLowerCase()));
-    $("autopilot-button").addEventListener("click", () => {
-      autopilot = !autopilot;
+    function setAutopilot(value) {
+      if (autopilot === value) return;
+      autopilot = value;
       invalidateQualification(autopilot ? "autopilot_enabled" : "manual");
       const result = djev.invalidateController(controller, autopilot ? "autopilot_enabled" : "manual");
       updateRecentFromEvents(result.events);
       enqueueEvents(result.events);
+      if (!autopilot) { keys.clear(); touchState.dirs.clear(); touchState.fire = false; }
       $("autopilot-button").textContent = autopilot ? "Auto pilot: ON" : "Auto pilot: OFF";
-    });
+    }
+
+    // Any manual flight key takes the controls from the autopilot.
+    function takeOver() {
+      if (autopilot && !introActive && game && !game.terminal) setAutopilot(false);
+    }
+
+    const CONTROL_GUIDE = Object.freeze([
+      ["Arrows / WASD", "move (takes the controls from the autopilot)"],
+      ["J / Z (hold)", "fire gun, homing missiles, and escort jets"],
+      ["B / X", "detonate a bomb (or sacrifice a jet when out of bombs)"],
+      ["P / Tab", "toggle autopilot (Julia) on or off"],
+      ["Space / Esc", "pause or resume"],
+      ["R", "restart the run"],
+      ["H / ?", "show or hide this guide"],
+    ]);
+
+    function renderGuide(id) {
+      $(id).innerHTML = CONTROL_GUIDE.map(([keysText, action]) => `<kbd>${escapeHtml(keysText)}</kbd><span>${escapeHtml(action)}</span>`).join("")
+        + `<span class="touch-note">Touch screens: in manual mode an on-screen D-pad plus FIRE and BOMB buttons appear under the arena.</span>`;
+    }
+
+    // The intro shows a preview game with no run, trace, or decision request behind it.
+    function showIntro() {
+      introActive = true;
+      runId = null;
+      runState = null;
+      game = core.createGame({ seed:20260920, difficulty });
+      controller = djev.createController({ run_id:null, epoch:1 });
+      controller.lastNeutralReason = "intro";
+      tracePath = "not started";
+      qualification = { valid:true, reason:"awaiting start" };
+      lastObservation = currentObservation();
+      $("intro").classList.add("show");
+      setTimeout(() => $("intro-auto").focus?.({ preventScroll:true }), 0);
+    }
+
+    function hideIntro() {
+      introActive = false;
+      $("intro").classList.remove("show");
+    }
+
+    function startFromIntro(mode) {
+      if (!introActive) return;
+      const starting = restartRun("intro_start");
+      if (mode === "manual") setAutopilot(false);
+      return starting;
+    }
+
+    function setGuide(open) {
+      guideOpen = open;
+      $("guide").classList.toggle("show", open);
+      if (open) setTimeout(() => $("guide-close").focus?.({ preventScroll:true }), 0);
+    }
+
+    function onKeyDown(event) {
+      const key = event.key.toLowerCase();
+      const onControl = event.target && /^(button|input|select|textarea)$/i.test(event.target.tagName || "");
+      if (guideOpen) {
+        if (key === "escape" || key === "h" || key === "?") { event.preventDefault(); setGuide(false); }
+        return;
+      }
+      if (introActive) {
+        if (key === "enter" && !onControl) { event.preventDefault(); startFromIntro("auto"); }
+        else if (key === "m") { event.preventDefault(); startFromIntro("manual"); }
+        return;
+      }
+      if (["arrowleft","arrowright","arrowup","arrowdown","w","a","s","d"," "].includes(key)) event.preventDefault();
+      if (key === " " || key === "escape") setPaused(!paused);
+      else if (key === "h" || key === "?") setGuide(true);
+      else if (key === "p" || key === "tab" && !onControl) { event.preventDefault(); if (!event.repeat) setAutopilot(!autopilot); }
+      else if (key === "r") { if (!event.repeat) { invalidateQualification("reset"); restartRun(); } }
+      else if (BOMB_KEYS.includes(key)) { if (!event.repeat) { takeOver(); manualBombRequests += 1; } }
+      else {
+        if (FIRE_KEYS.includes(key) || Object.values(MOVE_KEYS).some((list) => list.includes(key))) takeOver();
+        keys.add(key);
+      }
+    }
+
+    function onKeyUp(event) {
+      keys.delete(event.key.toLowerCase());
+    }
+
+    // Touch controls feed the same held-direction / fire / bomb inputs as the keyboard.
+    function bindTouchControls() {
+      isTouchDevice = (typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches) || "ontouchstart" in window || (navigator.maxTouchPoints || 0) > 0;
+      const hold = (button, press, release) => {
+        button.addEventListener("pointerdown", (event) => { event.preventDefault(); button.setPointerCapture?.(event.pointerId); button.classList.add("on"); press(event); });
+        for (const type of ["pointerup", "pointercancel", "lostpointercapture"]) button.addEventListener(type, (event) => { button.classList.remove("on"); release(event); });
+        button.addEventListener("contextmenu", (event) => event.preventDefault());
+      };
+      document.querySelectorAll("#touch-pad .dpad button[data-dirs]").forEach((button) => {
+        const dirs = button.dataset.dirs.split(" ");
+        hold(button, (event) => touchState.dirs.set(event.pointerId, dirs), (event) => touchState.dirs.delete(event.pointerId));
+      });
+      hold($("touch-fire"), () => { touchState.fire = true; }, () => { touchState.fire = false; });
+      hold($("touch-bomb"), () => { manualBombRequests += 1; }, () => {});
+    }
+
+    // Draws the real pixel sprites into the intro legend.
+    function renderLegendSprites() {
+      document.querySelectorAll("canvas.legend-sprite").forEach((target) => {
+        const surface = sprite(target.dataset.sprite, target.dataset.tint || "W");
+        const context = target.getContext("2d");
+        context.imageSmoothingEnabled = false;
+        const scale = Math.max(1, Math.floor(Math.min((target.width - 6) / surface.width, (target.height - 6) / surface.height)));
+        context.drawImage(surface, Math.floor((target.width - surface.width * scale) / 2), Math.floor((target.height - surface.height * scale) / 2), surface.width * scale, surface.height * scale);
+      });
+    }
+
+    // Decision API choice (see initProviderSettings): loaded before any run can start.
+    const PROVIDER_STORE = "jev.provider.v1";
+    let providerInfo = null;
+    let providerChoice = (() => {
+      try {
+        const saved = JSON.parse(localStorage.getItem(PROVIDER_STORE) || "null");
+        if (saved && saved.url && saved.model && saved.flavor) return { preset:saved.preset || "custom", url:saved.url, model:saved.model, flavor:saved.flavor };
+      } catch {}
+      return null;
+    })();
+
+    // ?autostart=1 skips the intro and starts the autopilot run at once (headless recorders);
+    // ?autostart=manual starts a manual run.
+    function bootstrap() {
+      renderGuide("intro-keys");
+      renderGuide("guide-keys");
+      bindTouchControls();
+      renderLegendSprites();
+      const autostart = new URLSearchParams(location.search).get("autostart");
+      if (autostart === "1" || autostart === "auto") restartRun();
+      else if (autostart === "manual") { showIntro(); startFromIntro("manual"); }
+      else showIntro();
+    }
+
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", () => { keys.clear(); touchState.dirs.clear(); touchState.fire = false; });
+    $("autopilot-button").addEventListener("click", () => setAutopilot(!autopilot));
+    // Decision API settings. The page only chooses; the bridge validates, holds the key in memory
+    // for the run, and never returns it. Non-secret choices persist in localStorage; the key does not.
+
+    function providerLabel(choice) {
+      const current = choice || (providerInfo && providerInfo.default);
+      return current ? `⚙ API: ${current.model}` : "⚙ API: default";
+    }
+
+    function fillProviderForm(values) {
+      $("provider-preset").value = values.preset && [...$("provider-preset").options].some((o) => o.value === values.preset) ? values.preset : "custom";
+      $("provider-url").value = values.url || "";
+      $("provider-model").value = values.model || "";
+      $("provider-flavor").value = values.flavor || "julia";
+      $("provider-key").value = values.api_key || "";
+    }
+
+    async function initProviderSettings() {
+      try {
+        const response = await fetch("/api/provider", { cache:"no-store" });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        providerInfo = await response.json();
+      } catch (error) {
+        providerInfo = null;
+      }
+      const select = $("provider-preset");
+      const presets = providerInfo ? providerInfo.presets : [];
+      select.innerHTML = presets.map((p) => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.label)}</option>`).join("") + '<option value="custom">Custom…</option>';
+      $("provider-button").textContent = providerLabel(providerChoice);
+      select.addEventListener("change", () => {
+        const preset = presets.find((p) => p.id === select.value);
+        if (preset) fillProviderForm({ preset:preset.id, url:preset.url, model:preset.model, flavor:preset.flavor, api_key:$("provider-key").value });
+      });
+      $("provider-button").addEventListener("click", () => {
+        const base = providerChoice || (providerInfo && providerInfo.default) || { preset:"julia", url:"http://127.0.0.1:8011", model:"julia-1", flavor:"julia" };
+        fillProviderForm({ ...base, api_key:providerChoice && providerChoice.api_key || "" });
+        const oracle = providerInfo && providerInfo.oracle ? " This bridge runs in oracle mode, so no model is called." : "";
+        $("provider-status").textContent = (providerInfo ? `Server default: ${providerInfo.default.model} at ${providerInfo.default.url}${providerInfo.default.has_server_key ? " (server key set)" : ""}.` : "Could not read the server defaults.") + oracle;
+        $("provider-dialog").showModal();
+      });
+      const close = () => $("provider-dialog").close();
+      $("provider-close").addEventListener("click", close);
+      $("provider-cancel").addEventListener("click", close);
+      $("provider-reset").addEventListener("click", () => {
+        providerChoice = null;
+        try { localStorage.removeItem(PROVIDER_STORE); } catch {}
+        $("provider-button").textContent = providerLabel(null);
+        close();
+        $("restart-button").click();
+      });
+      $("provider-form").addEventListener("submit", (event) => {
+        event.preventDefault();
+        const url = $("provider-url").value.trim().replace(/\/+$/, "");
+        const model = $("provider-model").value.trim();
+        let parsed = null;
+        try { parsed = new URL(url); } catch {}
+        if (!parsed || !/^https?:$/.test(parsed.protocol) || parsed.username || parsed.password || parsed.search || parsed.hash) {
+          $("provider-status").textContent = "Enter an absolute http(s) base URL without credentials or a query.";
+          return;
+        }
+        if (/\/v1\/systemone$/.test(parsed.pathname.replace(/\/+$/, ""))) {
+          $("provider-status").textContent = "Use the base URL; the bridge appends /v1/systemone.";
+          return;
+        }
+        if (!model) {
+          $("provider-status").textContent = "Enter a model name.";
+          return;
+        }
+        const key = $("provider-key").value;
+        providerChoice = { preset:$("provider-preset").value, url, model, flavor:$("provider-flavor").value, ...(key ? { api_key:key } : {}) };
+        try { localStorage.setItem(PROVIDER_STORE, JSON.stringify({ preset:providerChoice.preset, url, model, flavor:providerChoice.flavor })); } catch {}
+        $("provider-button").textContent = providerLabel(providerChoice);
+        close();
+        $("restart-button").click();
+      });
+    }
+
+    $("guide-button").addEventListener("click", () => setGuide(true));
+    initProviderSettings();
+    $("guide-close").addEventListener("click", () => setGuide(false));
+    $("guide").addEventListener("click", (event) => { if (event.target === event.currentTarget) setGuide(false); });
+    $("intro-auto").addEventListener("click", () => startFromIntro("auto"));
+    $("intro-manual").addEventListener("click", () => startFromIntro("manual"));
     $("pause-button").addEventListener("click", () => setPaused(!paused));
     $("history").addEventListener("click", (event) => {
       const row = event.target.closest(".history-item[data-seq]");
@@ -3325,7 +3927,7 @@
     ["bullet-density","enemy-density","fast-bullet-ratio","fast-bullet-speed"].forEach((id) => $(id).addEventListener("input", readDifficultyControls));
 
     syncDifficultyControls();
-    restartRun();
+    bootstrap();
     requestAnimationFrame(frame);
   })();
   </script>

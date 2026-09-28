@@ -166,6 +166,14 @@ function scoutEnemy({ id = 'enemy-fixture', x = 260, y = 300 }) {
   return { id, type: 'scout', x, y, vx: 0, phase: 0, w: 32, h: 24, hp: 2, maxHp: 2 };
 }
 
+function classListStub() {
+  const names = new Set();
+  return {
+    add: (name) => names.add(name), remove: (name) => names.delete(name), contains: (name) => names.has(name),
+    toggle: (name, force) => { const on = force === undefined ? !names.has(name) : Boolean(force); if (on) names.add(name); else names.delete(name); return on; },
+  };
+}
+
 // Exercise the actual adapter with a stub DOM and no bootstrap or animation.
 // Lifecycle tests supply mocked transport; no test can reach a real HTTP service.
 function loadBrowserAdapter(modules, game, controller, options = {}) {
@@ -173,7 +181,7 @@ function loadBrowserAdapter(modules, game, controller, options = {}) {
   const element = (id) => {
     if (!elements.has(id)) elements.set(id, {
       textContent: '', innerHTML: '', width: 960, height: 620,
-      getContext: () => ({}), addEventListener() {}, classList: { toggle() {} },
+      getContext: () => ({}), addEventListener() {}, classList: classListStub(),
     });
     return elements.get(id);
   };
@@ -197,7 +205,7 @@ function loadBrowserAdapter(modules, game, controller, options = {}) {
     fixtureGame: game, fixtureController: controller,
   };
   const adapterScript = modules.html.match(/<script>\s*([\s\S]*?)<\/script>/)[1];
-  const bootstrap = /    syncDifficultyControls\(\);\s*restartRun\(\);\s*requestAnimationFrame\(frame\);\s*\}\)\(\);\s*$/;
+  const bootstrap = /    syncDifficultyControls\(\);\s*bootstrap\(\);\s*requestAnimationFrame\(frame\);\s*\}\)\(\);\s*$/;
   assert.ok(bootstrap.test(adapterScript), 'adapter bootstrap must be excluded from this offline harness');
   vm.runInNewContext(adapterScript.replace(bootstrap, `
     game = fixtureGame;
@@ -206,8 +214,9 @@ function loadBrowserAdapter(modules, game, controller, options = {}) {
     globalThis.adapter = {
       currentObservation, updateRecentFromEvents, updatePanel, setPaused,
       restartRun, maybeBeginDecision, endRun, processTick, enqueueEvents, drainTrace,
+      showIntro, startFromIntro, onKeyDown, onKeyUp, updateManual, update, setAutopilot, weaponText,
       getState: () => ({ game, controller, runId, qualification, lastApi,
-        completionEvents, history, nextRequestAllowedWallMs }),
+        completionEvents, history, nextRequestAllowedWallMs, introActive, autopilot, runState, manualBombRequests }),
     };
   })();`), sandbox);
   element('space-decision-core').textContent = modules.coreScript;
@@ -257,6 +266,119 @@ function browserTransport() {
   };
   return transport;
 }
+
+const keyEvent = (key, extra = {}) => ({ key, repeat: false, target: { tagName: 'BODY' }, preventDefault() {}, ...extra });
+
+test('the intro screen gates the run: no trace or decision until the player starts, Enter starts the autopilot', async (t) => {
+  const bridge = browserTransport();
+  const clock = { now: 0 };
+  const { adapter, element } = loadBrowserAdapter(loadModules(), null, null, { fetch: bridge.fetch, clock, t });
+  adapter.showIntro();
+  assert.equal(adapter.getState().introActive, true);
+  assert.ok(element('intro').classList.contains('show'));
+  const preview = adapter.getState().game;
+  adapter.update(0);
+  adapter.update(500);
+  adapter.onKeyDown(keyEvent('j'));
+  adapter.onKeyDown(keyEvent('b'));
+  adapter.updatePanel();
+  assert.equal(preview.tick, 0, 'the preview game does not run');
+  assert.equal(bridge.calls.length, 0, 'no run start, trace, or decision request before the player chooses');
+  assert.equal(adapter.getState().runState, null);
+  assert.equal(element('hud-mode').textContent, 'INTRO');
+
+  const starting = adapter.startFromIntro('auto') ?? null;
+  assert.ok(starting, 'starting returns the run start');
+  await starting;
+  assert.equal(adapter.getState().introActive, false);
+  assert.ok(!element('intro').classList.contains('show'));
+  assert.equal(adapter.getState().autopilot, true);
+  assert.ok(bridge.calls.some((call) => call.route === '/api/run/start'));
+  await waitUntil(() => bridge.decisions().length === 1);
+  bridge.accept(bridge.decisions()[0]);
+  await waitUntil(() => !adapter.getState().controller.pending);
+  await adapter.endRun('aborted');
+
+  // Enter on the intro starts the autopilot too; M starts a manual run.
+  adapter.showIntro();
+  adapter.onKeyDown(keyEvent('Enter'));
+  assert.equal(adapter.getState().introActive, false);
+  assert.equal(adapter.getState().autopilot, true);
+  await adapter.getState().runState.startPromise;
+  await waitUntil(() => bridge.decisions().length === 2);
+  bridge.accept(bridge.decisions()[1]);
+  await waitUntil(() => !adapter.getState().controller.pending);
+  await adapter.endRun('aborted');
+  adapter.showIntro();
+  adapter.onKeyDown(keyEvent('m'));
+  assert.equal(adapter.getState().autopilot, false);
+  assert.equal(adapter.getState().qualification.valid, false, 'manual play is never benchmark-qualified');
+  await adapter.getState().runState.startPromise;
+  await adapter.endRun('aborted');
+  assert.equal(bridge.decisions().length, 2, 'a manual run sends no decision requests');
+});
+
+test('restart (as the headless recorder clicks it) dismisses the intro and starts an autopilot run', async (t) => {
+  const bridge = browserTransport();
+  const { adapter, element } = loadBrowserAdapter(loadModules(), null, null, { fetch: bridge.fetch, clock: { now: 0 }, t });
+  adapter.showIntro();
+  await adapter.restartRun();
+  assert.equal(adapter.getState().introActive, false);
+  assert.ok(!element('intro').classList.contains('show'));
+  assert.equal(adapter.getState().autopilot, true);
+  await waitUntil(() => bridge.decisions().length === 1);
+  bridge.accept(bridge.decisions()[0]);
+  await waitUntil(() => !adapter.getState().controller.pending);
+  await adapter.endRun('aborted');
+});
+
+test('manual keys take over from the autopilot and fire and bomb through the core command', async (t) => {
+  const bridge = browserTransport();
+  const { adapter } = loadBrowserAdapter(loadModules(), null, null, { fetch: bridge.fetch, clock: { now: 0 }, t });
+  await adapter.restartRun();
+  bridge.accept(bridge.decisions()[0]);
+  await waitUntil(() => !adapter.getState().controller.pending);
+  const { game } = adapter.getState();
+  game.enemyBullets = [{ id: 'near', x: game.player.x + 30, y: game.player.y - 40, vx: 0, vy: 0, radius: 4 }];
+  const charges = game.bomb.charges;
+
+  adapter.onKeyDown(keyEvent('b'));
+  assert.equal(adapter.getState().autopilot, false, 'a manual key takes over');
+  assert.equal(adapter.getState().qualification.valid, false);
+  adapter.onKeyDown(keyEvent('b', { repeat: true }));
+  adapter.onKeyUp(keyEvent('b'));
+  assert.equal(adapter.getState().manualBombRequests, 1, 'key repeat does not queue more bombs');
+  adapter.updateManual(1 / 60);
+  assert.equal(game.bomb.charges, charges - 1, 'one detonation through the core bomb rule');
+  assert.equal(game.counters.bombsUsed, 1);
+  assert.ok(!game.enemyBullets.some((b) => b.id === 'near'), 'the blast cleared the nearby bullet');
+  adapter.updateManual(1 / 60);
+  assert.equal(game.bomb.charges, charges - 1, 'one press, one bomb');
+
+  const shotsBefore = game.counters.playerShots;
+  game.player.cooldown_s = 0;
+  adapter.onKeyDown(keyEvent('j'));
+  adapter.updateManual(1 / 60);
+  assert.ok(game.counters.playerShots > shotsBefore, 'holding J fires the gun');
+  adapter.onKeyUp(keyEvent('j'));
+  const x = game.player.x;
+  adapter.onKeyDown(keyEvent('ArrowLeft'));
+  adapter.updateManual(1 / 60);
+  adapter.onKeyUp(keyEvent('ArrowLeft'));
+  assert.ok(Math.abs(game.player.x - (x - 280 / 60)) < 1e-6, 'arrows move at manual speed');
+
+  adapter.onKeyDown(keyEvent('p'));
+  assert.equal(adapter.getState().autopilot, true, 'P hands control back to the autopilot');
+  await adapter.endRun('aborted');
+});
+
+test('the HUD weapon text names each upgrade', () => {
+  const { adapter } = loadBrowserAdapter(loadModules(), null, null);
+  assert.equal(adapter.weaponText(0), 'Lv 0 · 1-way · 1×salvo · 4 max');
+  assert.equal(adapter.weaponText(3), 'Lv 3 · 5-way · rapid · 3×salvo · 6 max');
+  assert.equal(adapter.weaponText(4), 'Lv 4 · 5-way · rapid · splash · 3×salvo · 6 max');
+  assert.equal(adapter.weaponText(5), 'Lv 5 · 5-way · rapid · splash · 8×salvo · 8 max');
+});
 
 test('run integrity shows recording only after the start acknowledgement', async (t) => {
   const bridge = browserTransport();
@@ -1032,7 +1154,7 @@ test('a new wave keeps bullets in flight instead of clearing them', () => {
   assert.ok(game.playerBullets.some((b) => b.id === 'old-shot'));
 });
 
-test('flying into pickups adds bombs up to six and raises weapon level to spread shots and six missiles', () => {
+test('flying into pickups adds bombs up to six and raises weapon level to spread shots and the missile caps', () => {
   const { core } = loadModules();
   const game = cleanForecastGame(core, { x: 480, y: 400 });
   game.pickupClock_s = { bomb: 99, weapon: 99 };
@@ -1051,7 +1173,7 @@ test('flying into pickups adds bombs up to six and raises weapon level to spread
     return core.stepGame(game, shoot).events.filter((e) => e.type === 'shot').length;
   };
   assert.equal(shotsAt(0), 1);
-  for (let i = 0; i < 5; i += 1) {
+  for (let i = 0; i < 7; i += 1) {
     game.weaponLevel = Math.min(game.weaponLevel, core.WEAPON.max_level);
     game.pickups = [pickup(`w${i}`, 'weapon')];
     core.stepGame(game, null);
@@ -1067,8 +1189,11 @@ test('flying into pickups adds bombs up to six and raises weapon level to spread
     game.missileClock_s = 0;
     return core.stepGame(game, shoot).events.filter((e) => e.type === 'missile_launch').length;
   };
-  assert.equal(core.MISSILE.max_active_top, 6);
-  assert.equal(launchesWith(5), 1, 'top weapon level allows a sixth missile');
+  assert.equal(core.MISSILE.max_active_top, 8);
+  assert.equal(launchesWith(7), 1, 'the missile swarm level allows an eighth missile');
+  assert.equal(launchesWith(8), 0);
+  game.weaponLevel = 3;
+  assert.equal(launchesWith(5), 1, 'levels 2-4 allow a sixth missile');
   assert.equal(launchesWith(6), 0);
   game.weaponLevel = 0;
   assert.equal(launchesWith(core.MISSILE.max_active), 0, 'level 0 caps at the base count');
@@ -1077,7 +1202,8 @@ test('flying into pickups adds bombs up to six and raises weapon level to spread
 test('forecast marks moves that collect or approach a wanted pickup, and ignores unwanted ones', () => {
   const { core } = loadModules();
   const game = cleanForecastGame(core, { x: 480, y: 400 });
-  game.pickups = [{ id: 'p', kind: 'bomb', x: 540, y: 400, vx: 0, vy: 0, age_s: 0, hue: 0 }];
+  // 160 px away: moving right brings the ship inside the 110 px magnet radius within the lease.
+  game.pickups = [{ id: 'p', kind: 'bomb', x: 640, y: 400, vx: 0, vy: 0, age_s: 0, hue: 0 }];
   const byId = () => Object.fromEntries(core.observeGame(game, { expected_delay_ms: 0 }).forecast.candidates.map((c) => [c.id, c.medium]));
   let forecast = byId();
   assert.equal(forecast.right.pickup_collect, 'bomb');
@@ -1090,6 +1216,207 @@ test('forecast marks moves that collect or approach a wanted pickup, and ignores
   game.bomb.charges = core.BOMB.max_charges;
   forecast = byId();
   assert.equal(forecast.right.pickup_toward, null, 'full bombs make bomb pickups unwanted');
+});
+
+// A forecast fixture with no wave refills, pickup spawns, or boss, for the weapon and pickup rules.
+function quietGame(core, overrides) {
+  const game = cleanForecastGame(core, overrides);
+  game.waveActive = false;
+  game.pickups = [];
+  game.pickupClock_s = { bomb: 99, weapon: 99, wingman: 99 };
+  game.boss.clock_s = 999;
+  return game;
+}
+
+test('weapon max level is 5 and each level adds its rule', () => {
+  const { core } = loadModules();
+  assert.equal(core.WEAPON.max_level, 5);
+  for (const table of ['spread_by_level', 'missile_salvo_by_level', 'missile_cap_bonus_by_level']) {
+    assert.equal(core.WEAPON[table].length, core.WEAPON.max_level + 1, table);
+  }
+  assert.equal(core.MISSILE.max_active_top, 8);
+});
+
+test('the pickup magnet pulls a nearby pickup in and collects it without the ship moving', () => {
+  const { core } = loadModules();
+  const game = quietGame(core, { x: 480, y: 540 });
+  game.pickupClock_s = { bomb: 99, weapon: 99, wingman: 99 };
+  // 90 px left of the ship, drifting away from it: inside the 110 px radius, not touching the ship.
+  game.pickups = [{ id: 'mag', kind: 'weapon', x: 390, y: 540, vx: -55, vy: 0, age_s: 0, hue: 0 }];
+  const before = Math.abs(game.pickups[0].x - game.player.x);
+  core.stepGame(game, null);
+  assert.ok(Math.abs(game.pickups[0].x - game.player.x) < before, 'the pickup moves toward the ship');
+  let collected = null;
+  for (let tick = 0; tick < 60 && !collected; tick += 1) {
+    collected = core.stepGame(game, null).events.find((e) => e.type === 'pickup_collected');
+  }
+  assert.ok(collected, 'collected within a second');
+  assert.equal(collected.kind, 'weapon');
+  assert.equal(game.weaponLevel, 1);
+  assert.equal(game.player.x, 480, 'the ship never moved');
+
+  // Outside the radius a pickup keeps drifting.
+  const far = quietGame(core, { x: 480, y: 540 });
+  far.pickupClock_s = { bomb: 99, weapon: 99, wingman: 99 };
+  far.pickups = [{ id: 'far', kind: 'bomb', x: 300, y: 400, vx: 0, vy: 0, age_s: 0, hue: 0 }];
+  core.stepGame(far, null);
+  assert.deepEqual([far.pickups[0].x, far.pickups[0].y], [300, 400]);
+});
+
+test('a pickup that reaches the magnet radius is collected even while the ship flies away', () => {
+  const { core } = loadModules();
+  const game = quietGame(core, { x: 480, y: 450 });
+  game.pickupClock_s = { bomb: 99, weapon: 99, wingman: 99 };
+  // Just inside the edge, drifting away at full drift speed, while the ship flees at full speed.
+  game.pickups = [{ id: 'edge', kind: 'bomb', x: 375, y: 450, vx: -55, vy: 0, age_s: 0, hue: 0 }];
+  const flee = { movement: 'right', fire: 'cease', decision_id: 'flee', sequence: 1, source: 'djev' };
+  let collected = false;
+  for (let tick = 0; tick < 120 && !collected; tick += 1) collected = core.stepGame(game, flee).events.some((e) => e.type === 'pickup_collected');
+  assert.ok(collected);
+});
+
+test('forecast collect facts follow the magnet radius', () => {
+  const { core } = loadModules();
+  const game = quietGame(core, { x: 480, y: 400 });
+  game.pickups = [{ id: 'near', kind: 'weapon', x: 580, y: 400, vx: 0, vy: 0, age_s: 0, hue: 0 }];
+  const byId = () => Object.fromEntries(core.observeGame(game, { expected_delay_ms: 0 }).forecast.candidates.map((c) => [c.id, c.medium]));
+  // Already within 110 px: every move collects it, because the magnet reaches it whatever the ship does.
+  assert.ok(Object.values(byId()).every((m) => m.pickup_collect === 'weapon'));
+  game.pickups[0].age_s = core.PICKUP.lifetime_s - .2;
+  assert.ok(Object.values(byId()).every((m) => m.pickup_collect === null), 'a pickup about to expire is not promised');
+});
+
+test('escort shots lead the nearest enemy within range, and keep their facing with none in range', () => {
+  const { core } = loadModules();
+  const game = quietGame(core, { x: 480, y: 500 });
+  game.wingmen = 1; // slot 0 faces left (180 deg)
+  game.wingPhase = 0;
+  const shoot = { movement: 'hold', fire: 'shoot', decision_id: 'esc', sequence: 1, source: 'djev' };
+  const escortShot = () => game.playerBullets.find((s) => s.wingman === 0 && s.id === game.playerBullets.filter((b) => b.wingman === 0).at(-1).id);
+
+  core.stepGame(game, shoot);
+  let shot = escortShot();
+  assert.ok(shot.vx < 0 && Math.abs(shot.vy) < 1e-6, 'no target: fires along its facing');
+
+  // An enemy far off the jet's axis: up and to the right, within 380 px.
+  game.playerBullets = [];
+  game.wingClock_s = 0;
+  game.player.cooldown_s = 0;
+  game.enemies = [{ ...scoutEnemy({ id: 'off-axis', x: 600, y: 250 }), vx: 35, hp: 999, maxHp: 999 }];
+  game.missileClock_s = 99; // keep homing missiles out of this check
+  core.stepGame(game, shoot);
+  shot = escortShot();
+  assert.equal(shot.aim_id, 'off-axis');
+  const wing = { x: shot.x - shot.vx / 60, y: shot.y - shot.vy / 60 };
+  const enemy = game.enemies[0];
+  const toEnemy = Math.atan2(enemy.y - wing.y, enemy.x - wing.x);
+  const heading = Math.atan2(shot.vy, shot.vx);
+  assert.ok(Math.abs(heading - toEnemy) < .35, 'heads toward the enemy');
+  assert.ok(heading > toEnemy - 1e-9, 'leads the target in its direction of motion (clockwise, since it drifts right and down)');
+  assert.ok(Math.abs(Math.hypot(shot.vx, shot.vy) - core.WINGMAN.shot_speed) < 1e-6);
+
+  // Fly the shot forward: it meets the moving enemy.
+  let hit = false;
+  for (let tick = 0; tick < 60 && !hit; tick += 1) hit = core.stepGame(game, { ...shoot, fire: 'cease' }).events.some((e) => e.type === 'enemy_damaged' && e.shot_id === shot.id);
+  assert.ok(hit, 'the led shot hits');
+
+  // Escorts never fire on cease.
+  game.playerBullets = [];
+  game.wingClock_s = 0;
+  core.stepGame(game, { ...shoot, fire: 'cease' });
+  assert.equal(game.playerBullets.length, 0);
+});
+
+test('rapid fire halves the gun cooldown from level 3', () => {
+  const { core } = loadModules();
+  const game = quietGame(core, { x: 480, y: 500 });
+  const shoot = { movement: 'hold', fire: 'shoot', decision_id: 'rapid', sequence: 1, source: 'djev' };
+  const cooldownAt = (level) => { game.weaponLevel = level; game.player.cooldown_s = 0; core.stepGame(game, shoot); return game.player.cooldown_s; };
+  const base = cooldownAt(2);
+  assert.ok(Math.abs(base - 0.17) < 1e-9, 'base gun cooldown');
+  assert.ok(Math.abs(cooldownAt(3) - base * .5) < 1e-9);
+  assert.ok(Math.abs(cooldownAt(5) - base * .5) < 1e-9);
+  const shotsIn = (level) => {
+    game.weaponLevel = level; game.player.cooldown_s = 0; game.playerBullets = [];
+    let n = 0;
+    for (let tick = 0; tick < 60; tick += 1) n += core.stepGame(game, shoot).events.filter((e) => e.type === 'shot').length;
+    return n / core.WEAPON.spread_by_level[level];
+  };
+  assert.ok(shotsIn(3) >= shotsIn(2) * 1.6, 'about twice the volleys per second (tick-quantised)');
+});
+
+test('explosive shells at level 4 splash nearby enemies and bullets; the boss only takes damage', () => {
+  const { core } = loadModules();
+  const shoot = { movement: 'hold', fire: 'shoot', decision_id: 'boom', sequence: 1, source: 'djev' };
+  const volley = (level) => {
+    const game = quietGame(core, { x: 480, y: 560 });
+    game.weaponLevel = level;
+    core.stepGame(game, shoot);
+    return game.playerBullets.filter((b) => b.wingman === undefined);
+  };
+  assert.ok(volley(4).every((b) => b.explosive), 'level 4 gun shells are explosive');
+  assert.ok(volley(3).every((b) => !b.explosive), 'level 3 shells are not');
+
+  // One level 4 shell flying straight up into 'struck'; 'neighbour' sits 30 px beside the hit point.
+  const shell = (game) => { game.playerBullets = [{ id: 'shell', x: 480, y: 520, vx: 0, vy: -580, radius: 3, level: 4, explosive: true, authorizedBy: null }]; };
+  const game = quietGame(core, { x: 480, y: 580 });
+  game.enemies = [
+    { ...scoutEnemy({ id: 'struck', x: 480, y: 470 }), phase: 0 },
+    { ...scoutEnemy({ id: 'neighbour', x: 510, y: 480 }), hp: 1, maxHp: 1, phase: 0 },
+    { ...scoutEnemy({ id: 'far-away', x: 700, y: 470 }), hp: 1, maxHp: 1, phase: 0 },
+  ];
+  game.enemyBullets = [bullet({ id: 'near-bullet', x: 465, y: 490 }), bullet({ id: 'far-bullet', x: 200, y: 450 })];
+  shell(game);
+  let splash = null;
+  for (let tick = 0; tick < 20 && !splash; tick += 1) splash = core.stepGame(game, null).events.find((e) => e.type === 'splash');
+  assert.ok(splash, 'the shell burst on hit');
+  assert.deepEqual([...splash.destroyed_enemy_ids], ['neighbour']);
+  assert.ok(!game.enemies.some((e) => e.id === 'neighbour'));
+  assert.equal(game.enemies.find((e) => e.id === 'struck').hp, 1, 'the struck enemy takes the normal hit only');
+  assert.ok(game.enemies.some((e) => e.id === 'far-away'), 'outside the radius is untouched');
+  assert.deepEqual([...splash.cleared_bullet_ids], ['near-bullet']);
+  assert.ok(game.enemyBullets.some((b) => b.id === 'far-bullet'));
+  assert.equal(game.counters.splashKills, 1);
+
+  // The same shell without the explosive flag leaves the neighbour alone.
+  const plain = quietGame(core, { x: 480, y: 580 });
+  plain.enemies = [{ ...scoutEnemy({ id: 'struck', x: 480, y: 470 }), phase: 0 }, { ...scoutEnemy({ id: 'neighbour', x: 510, y: 480 }), hp: 1, maxHp: 1, phase: 0 }];
+  shell(plain);
+  delete plain.playerBullets[0].explosive;
+  for (let tick = 0; tick < 20; tick += 1) assert.ok(!core.stepGame(plain, null).events.some((e) => e.type === 'splash'));
+  assert.ok(plain.enemies.some((e) => e.id === 'neighbour'));
+
+  // A boss inside the splash only loses hp.
+  const bossGame = quietGame(core, { x: 480, y: 580 });
+  bossGame.enemies = [{ ...scoutEnemy({ id: 'struck', x: 480, y: 470 }), phase: 0 }, { id: 'boss-x', type: 'boss', x: 480, y: 410, w: 96, h: 58, hp: 3, maxHp: 45, vx: 0, phase: 0 }];
+  shell(bossGame);
+  let bossSplash = null;
+  for (let tick = 0; tick < 20 && !bossSplash; tick += 1) bossSplash = core.stepGame(bossGame, null).events.find((e) => e.type === 'splash');
+  assert.ok(bossSplash);
+  const boss = bossGame.enemies.find((e) => e.id === 'boss-x');
+  assert.ok(boss && boss.hp === 3 - core.WEAPON.splash_damage, 'the boss takes splash damage, not instant death');
+});
+
+test('a level 5 salvo launches 8 fanned missiles in parallel, and escorts keep their slots within the cap', () => {
+  const { core } = loadModules();
+  const game = quietGame(core, { x: 480, y: 500 });
+  game.weaponLevel = 5;
+  game.enemies = [{ ...scoutEnemy({ id: 'sponge', x: 480, y: 60 }), hp: 999, maxHp: 999 }];
+  const shoot = { movement: 'hold', fire: 'shoot', decision_id: 'swarm', sequence: 1, source: 'djev' };
+  const launches = core.stepGame(game, shoot).events.filter((e) => e.type === 'missile_launch');
+  assert.equal(launches.length, 8, 'eight missiles on the same tick');
+  assert.equal(game.playerMissiles.length, 8);
+  const headings = game.playerMissiles.map((m) => m.heading);
+  assert.equal(new Set(headings.map((h) => h.toFixed(6))).size, 8, 'each on its own fanned heading');
+  assert.ok(Math.max(...headings) - Math.min(...headings) <= 2 * core.WEAPON.swarm_fan_rad + 1e-9);
+
+  const escorted = quietGame(core, { x: 480, y: 500 });
+  escorted.weaponLevel = 5;
+  escorted.wingmen = 2;
+  escorted.enemies = [{ ...scoutEnemy({ id: 'sponge', x: 480, y: 60 }), hp: 999, maxHp: 999 }];
+  const withEscorts = core.stepGame(escorted, shoot).events.filter((e) => e.type === 'missile_launch');
+  assert.equal(withEscorts.length, 8, 'the total salvo stays at 8');
+  assert.equal(withEscorts.filter((e) => e.wingman !== undefined).length, 2, 'both escort missile slots still fire');
 });
 
 test('controller carries a Djev bomb choice onto the active command and rejects unknown bomb values', () => {

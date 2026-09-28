@@ -26,6 +26,8 @@ type Config struct {
 	RunsDir      string
 	DjevURL      string
 	DjevModel    string
+	DjevFlavor   string // request flavor for the default provider (see provider.go)
+	DjevAPIKey   string // server-side key for the default provider; never sent to the page
 }
 
 // RunState is one game's trace and ordering state.
@@ -48,6 +50,9 @@ type RunState struct {
 
 	identityMu    sync.Mutex
 	modelIdentity map[string]any
+
+	provider Provider // endpoint, model and flavor for every decision of this run
+	client   Upstream // per-run upstream when the page chose a provider; nil uses the server's
 
 	lastEventID     *int64
 	eventHashes     map[int64]string
@@ -254,6 +259,10 @@ func (s *Server) StartRun(body any) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
+	provider, chosen, err := s.parseProvider(object["provider"])
+	if err != nil {
+		return nil, err
+	}
 	promptText, promptHash, err := s.loadStrategy(manifest["prompt_version"].(string))
 	if err != nil {
 		return nil, err
@@ -288,7 +297,11 @@ func (s *Server) StartRun(body any) (map[string]any, error) {
 		PromptVersion: PromptVersion, PromptText: promptText, PromptHash: promptHash,
 		ContextVer: ContextVersion, EngineHash: engineHash,
 		upstream: make(chan struct{}, 1), trace: trace, eventHashes: map[int64]string{},
-		modelIdentity: map[string]any{"configured_model": s.cfg.DjevModel, "endpoint": safeEndpoint(s.cfg.DjevURL), "response_model": nil},
+		modelIdentity: map[string]any{"configured_model": provider.Model, "endpoint": safeEndpoint(provider.URL), "provider": provider.Preset, "flavor": provider.Flavor, "response_model": nil},
+		provider:      provider,
+	}
+	if chosen && s.cfg.DjevModel != "oracle" {
+		run.client = newHTTPUpstream(provider.URL, provider.APIKey)
 	}
 	rules, _ := manifest["rules"].(map[string]any)
 	err = run.appendRecord(map[string]any{
@@ -393,7 +406,7 @@ func (s *Server) HandleDecision(ctx context.Context, body any) (map[string]any, 
 
 	identity := run.identity()
 	bombCriteria := buildBombCriteria(bomb, bestTier)
-	payload := buildUpstreamPayload(fmt.Sprint(identity["configured_model"]), run.PromptText, packed, criteria, bombCriteria)
+	payload := buildUpstreamPayload(fmt.Sprint(identity["configured_model"]), run.PromptText, packed, criteria, bombCriteria, run.provider.Flavor)
 	// The exact wire bytes are logged before transport and reused for the request itself.
 	wire, err := marshalCompact(payload)
 	if err != nil {
@@ -422,8 +435,12 @@ func (s *Server) HandleDecision(ctx context.Context, body any) (map[string]any, 
 	upstreamMono := s.monotonicMs()
 	upstreamStart := time.Now()
 	s.exchanges.add(Exchange{RunID: run.RunID, DecisionID: id, Sequence: request.Sequence,
-		Endpoint: safeEndpoint(s.cfg.DjevURL) + "/v1/systemone", RecordedAt: upstreamUTC, RequestBody: exactBody, Pending: true})
-	upstream, callErr := s.upstream.Call(ctx, wire)
+		Endpoint: safeEndpoint(run.provider.URL) + "/v1/systemone", RecordedAt: upstreamUTC, RequestBody: exactBody, Pending: true})
+	client := s.upstream
+	if run.client != nil {
+		client = run.client
+	}
+	upstream, callErr := client.Call(ctx, wire)
 	if callErr != nil {
 		result := nullDecision(request, id, false, callErr.Error(), float64(time.Since(upstreamStart).Nanoseconds())/1e6)
 		s.exchanges.complete(run.RunID, request.Sequence, nil, nil, result["error"], round(float64(time.Since(upstreamStart).Nanoseconds())/1e6, 1))

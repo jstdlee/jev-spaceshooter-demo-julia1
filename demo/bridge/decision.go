@@ -646,20 +646,26 @@ func choiceCriteria(ids []string, descriptions map[string]string) *OrderedMap {
 	return criteria
 }
 
-func buildUpstreamPayload(model, promptText string, packed, pathCriteria, bombCriteria *OrderedMap) *OrderedMap {
+func buildUpstreamPayload(model, promptText string, packed, pathCriteria, bombCriteria *OrderedMap, flavor string) *OrderedMap {
 	question := func(instructions string, criteria *OrderedMap) *OrderedMap {
 		return NewOrderedMap().Set("type", "choice").Set("instructions", instructions).Set("criteria", criteria)
 	}
-	return NewOrderedMap().
+	path := question(pathInstructions, pathCriteria)
+	if flavor == "julia" {
+		path.Set("option_questions", pathOptionQuestions())
+	}
+	payload := NewOrderedMap().
 		Set("model", model).
 		Set("instructions", promptText).
 		Set("state", packed).
 		Set("questions", NewOrderedMap().
-			Set("path", question(pathInstructions, pathCriteria).Set("option_questions", pathOptionQuestions())).
+			Set("path", path).
 			Set("fire", question(fireInstructions, choiceCriteria(FireIDs, FireDescriptions))).
-			Set("bomb", question(bombInstructions, bombCriteria))).
-		Set("samples", 1).
-		Set("steps", 1)
+			Set("bomb", question(bombInstructions, bombCriteria)))
+	if flavor != "laya" {
+		payload.Set("samples", 1).Set("steps", 1)
+	}
+	return payload
 }
 
 // pathOptionQuestions asks Julia 1 for two judgements of every path label, which the
