@@ -1098,6 +1098,12 @@ func TestHomeZoneTierAndTags(t *testing.T) {
 			t.Errorf("%s: label %q mentions the zone", tc.name, label)
 		}
 	}
+	// The zone never makes a move RISKY: an OK move outside the zone stays OK.
+	okOutside := row(480, 600, 520, 600)
+	okOutside.EscapeOptions = 3
+	if got := pathTier(okOutside); got != "OK" {
+		t.Errorf("an OK move outside the zone became %s", got)
+	}
 	// Danger tiers ignore the zone.
 	deadly := row(480, 600, 480, 610)
 	ms := 120.0

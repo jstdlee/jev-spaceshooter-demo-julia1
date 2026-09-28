@@ -58,8 +58,8 @@ const (
 	goodMinEscapes   = 4
 	okMinEscapes     = 2
 	centerProgressPx = 15
-	// Home zone: the central 3/4 of the arena's width and height. A safe move that ends outside it
-	// without closing in by zoneProgressPx drops one tier, so the ship returns when it safely can.
+	// Home zone: the central 3/4 of the arena's width and height. A GOOD move that ends outside it
+	// without closing in by zoneProgressPx becomes OK, so the ship returns when it safely can.
 	zoneMinX, zoneMaxX = 120.0, 840.0
 	zoneMinY, zoneMaxY = 77.5, 542.5
 	zoneProgressPx     = 10
@@ -427,11 +427,12 @@ func pathTier(row PathRow) string {
 	if row.Motion == "stationary" || row.Motion == "reverses" || row.WallRoom < nearWallRoomPx {
 		tier = shiftTier(tier, 1)
 	}
-	// Staying in the home zone is positional, like the wall rule: a safe move that ends outside the
-	// zone without returning to it costs one tier. Danger tiers are never changed, so the ship can
-	// still leave the zone to dodge, and a wanted pickup below can still lift the move back.
-	if row.ZoneEndOut > 0 && !row.zoneReturning() {
-		tier = shiftTier(tier, 1)
+	// Staying in the home zone is a preference, never a safety cost: a GOOD move that ends outside
+	// the zone without returning becomes OK, and nothing is ever pushed down to RISKY, so a move
+	// outside the zone is never ranked with genuinely risky ones. Danger tiers are untouched, so the
+	// ship can always leave the zone to dodge, and a wanted pickup below can still lift the move.
+	if tier == "GOOD" && row.ZoneEndOut > 0 && !row.zoneReturning() {
+		tier = "OK"
 	}
 	// Supplies are a strategic goal, so they live in the rank Djev follows: collecting a wanted
 	// pickup lifts a safe move one tier, and while one is reachable, safe moves that ignore it

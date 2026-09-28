@@ -118,11 +118,12 @@ The remaining words are facts for choosing within a tier: clear follow-ups (`esc
 `keeps course` for the move that continues the executing command.
 
 **Home zone.** The central ¾ of the arena's width and height (x 120–840, y 78–543) is the home zone, drawn as a faint
-dotted frame that turns amber while the ship is outside. A safe move (tier 1–2) that ends outside it without heading
-back drops one tier and is labelled `leaves zone` or `outside zone`; moves that re-enter or close in by 10 px say
-`back to zone`. Danger tiers are never changed, so the ship can still leave the zone to dodge, and it returns as soon
-as a safe way back exists. In a 4-seed dense-mid-speed lockstep check, time outside the zone fell from 41.5% to 22.4%
-with 4/4 full runs and 0 hits.
+dotted frame that turns amber while the ship is outside. Staying in it is a preference, never a safety cost: a GOOD
+move that ends outside it without heading back becomes OK (labelled `leaves zone` or `outside zone`), and the zone
+never pushes any move down to RISKY or changes the danger tiers, so leaving the zone to dodge is always possible.
+Moves that re-enter or close in by 10 px say `back to zone`. In 4-seed lockstep checks the ship spent 37% of the time
+outside the zone on dense-mid-speed (41.5% without the rule; at most 54 px out instead of 98) and 27.5% on hardest,
+with 4/4 full runs and 0 hits on both profiles.
 
 ### How Julia is asked
 
