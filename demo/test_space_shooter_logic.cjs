@@ -1327,6 +1327,30 @@ test('escort shots lead the nearest enemy within range, and keep their facing wi
   assert.equal(game.playerBullets.length, 0);
 });
 
+test('escorts aim across the whole arena and defend the ship from nearby missiles first', () => {
+  const { core } = loadModules();
+  const game = quietGame(core, { x: 480, y: 540 });
+  game.wingmen = 1;
+  game.wingPhase = 0;
+  game.missileClock_s = 99;
+  const shoot = { movement: 'hold', fire: 'shoot', decision_id: 'esc2', sequence: 1, source: 'djev' };
+  const lastEscortShot = () => game.playerBullets.filter((b) => b.wingman === 0).at(-1);
+
+  // A formation enemy near the top, far outside the old 380 px range, is still aimed at.
+  game.enemies = [{ ...scoutEnemy({ id: 'top', x: 700, y: 70 }), hp: 999, maxHp: 999 }];
+  core.stepGame(game, shoot);
+  assert.equal(lastEscortShot().aim_id, 'top');
+  assert.ok(lastEscortShot().vy < 0, 'fires upward toward the formation');
+
+  // An enemy missile closing on the ship wins over a nearer enemy ship.
+  game.playerBullets = [];
+  game.wingClock_s = 0;
+  game.enemies = [{ ...scoutEnemy({ id: 'near-ship', x: 430, y: 470 }), hp: 999, maxHp: 999 }];
+  game.enemyMissiles = [{ id: 'incoming', x: 640, y: 420, heading: Math.PI * 0.8, age_s: 0 }];
+  core.stepGame(game, shoot);
+  assert.equal(lastEscortShot().aim_id, 'incoming');
+});
+
 test('rapid fire halves the gun cooldown from level 3', () => {
   const { core } = loadModules();
   const game = quietGame(core, { x: 480, y: 500 });

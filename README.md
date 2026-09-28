@@ -127,7 +127,12 @@ The remaining words are facts for choosing within a tier: clear follow-ups (`esc
   avoidance in crisis states, about 80% best-tier picks overall.
 - **Labels tuned for Julia.** Motion is stated only as `keeps course`. The other motion words (turns, reverses,
   stationary) weighed as much as safety and caused jitter.
-- **Fire and bomb** are two-option choices scored the same independent way.
+- **Fire** is a two-option choice scored the same independent way.
+- **Bomb** adds two judgements to "right answer": *"Is this the rank 1 choice?"* (×2) and the outcome score (×3).
+  With "right answer" alone Julia detonated on `Rank 2 WASTE … destroys N bullets` labels (the word "destroys"
+  attracts it); with the three judgements it held on 151/151 recorded wasted-bomb states and still detonated in 96%
+  of `Rank 1 USE NOW` emergencies. In a 4-seed dense-mid-speed lockstep check, bombs used fell from 13 to 1 with
+  4/4 full runs, 0 hits and 23 of 48 pickups collected.
 - **Why independent scoring.** Each option is judged on its own text, so order can't bias the answer. The cost is
   latency (22 judgements per decision) and ignoring the shared `state`, which works only because every label is
   self-describing.
@@ -165,9 +170,9 @@ older engine); the setups differ, so the numbers aren't directly comparable.
   including escort missiles never exceeds 8.
 - **Homing missiles** launch automatically while the model's fire answer is `shoot`, steer toward a predicted
   intercept, and re-target when their target dies.
-- **Escort jets** (up to 8) ring the ship and fire every 0.17 s while the fire answer is `shoot`. Each shot aims
-  at the nearest enemy ship or enemy missile within 380 px of that jet, leading it; with none in range it flies
-  along the jet's outward facing. Their shots also destroy enemy bullets. A hit on the ship costs one jet; with no bombs left, a
+- **Escort jets** (up to 8) ring the ship and fire every 0.17 s while the fire answer is `shoot`. Each shot leads
+  its target: first the enemy missile nearest the ship within 260 px of the ship, otherwise the nearest enemy ship
+  or missile anywhere in the arena; with no enemies it flies along the jet's outward facing. Their shots also destroy enemy bullets. A hit on the ship costs one jet; with no bombs left, a
   detonate decision sacrifices a jet for the same blast.
 - **Bombs** start at 3 charges (max 6). A detonation destroys every enemy bullet and ship within 200 px; the boss
   takes 20 damage instead. The model decides when, from ranked hold/detonate labels.
@@ -191,7 +196,7 @@ run at once (`?autostart=manual` starts a manual run); the **Restart run** butto
 | R, **Restart run** button | start a new run |
 | H / ?, **? Controls** button | show the controls guide |
 | Touch (manual mode) | on-screen D-pad plus FIRE and BOMB buttons |
-| Threat level sliders | change bullet density, enemy density, fast-bullet share and speed |
+| Threat level sliders | change bullet density, enemy density, fast-bullet share and speed **live**, without restarting: bullet speed and fire rate follow from the next shot, enemy count from the next wave |
 
 Manual input, pausing, restarting or changing difficulty marks the run as not benchmark-qualified.
 

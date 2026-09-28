@@ -526,12 +526,13 @@
     // Up to eight little escort jets ring the ship, each facing its own direction (degrees, 0 = right, 90 = down).
     // Their shots destroy enemies and also enemy bullets and missiles; the first two add a missile to each salvo.
     // The ring orbits the ship at orbit_rad_s. Escorts fire (only while the fire answer is shoot) every fire_interval_s,
-    // on their own clock so the ship's rapid fire does not change it. Each shot auto-aims at the nearest enemy ship or
-    // enemy missile within aim_range_px of that jet, leading it (intercept at shot_speed); with none in range it flies
-    // along the jet's outward facing.
+    // on their own clock so the ship's rapid fire does not change it. Each shot auto-aims, leading its target
+    // (intercept at shot_speed): first the enemy missile nearest the ship within defend_range_px of the ship, otherwise
+    // the nearest enemy ship or missile within aim_range_px of that jet (the whole arena); with none it flies along the
+    // jet's outward facing.
     // With no bombs left, a detonate decision sacrifices one jet for the same blast.
     const WINGMAN = Object.freeze({ max:8, radius:40, slot_angles_deg:[180, 0, 225, 315, 135, 45, 270, 90], shot_speed:520, missile_slots:2, orbit_rad_s:1.6,
-      fire_interval_s:.17, aim_range_px:380 });
+      fire_interval_s:.17, aim_range_px:1200, defend_range_px:260 });
     // A boss appears at random times, parks near the top, and saturates the arena with bullet rings, aimed fans, and homing missiles.
     const BOSS = Object.freeze({ hp:45, w:96, h:58, score:500, station_y:95, speed:70, first_s:[40, 60], interval_s:[35, 55], bomb_damage:20,
       ring:{ count:14, interval_s:2.4, speed:150 }, fan:{ count:7, spread_rad:1, interval_s:1.8, speed:190 }, missiles:{ count:2, interval_s:4.5 } });
@@ -1387,8 +1388,18 @@
       game.player.cooldown_s = gunCooldownS(game.weaponLevel);
     }
 
-    // Nearest enemy ship or enemy missile within WINGMAN.aim_range_px of an escort jet (ties by id).
+    // An escort's target: the enemy missile closest to the ship within WINGMAN.defend_range_px of the ship, else the
+    // nearest enemy ship or missile within WINGMAN.aim_range_px of the jet (ties by id).
     function escortTarget(game, origin) {
+      let threat = null;
+      for (const missile of game.enemyMissiles) {
+        const distance = Math.hypot(missile.x - game.player.x, missile.y - game.player.y);
+        if (distance > WINGMAN.defend_range_px) continue;
+        if (!threat || distance < threat.distance || distance === threat.distance && String(missile.id) < String(threat.id)) {
+          threat = { id:missile.id, x:missile.x, y:missile.y, vx:Math.cos(missile.heading) * ENEMY_MISSILE.speed, vy:Math.sin(missile.heading) * ENEMY_MISSILE.speed, distance };
+        }
+      }
+      if (threat) return threat;
       let best = null;
       const consider = (id, x, y, vx, vy) => {
         const distance = Math.hypot(x - origin.x, y - origin.y);
@@ -2673,7 +2684,7 @@
       $("fast-bullet-speed-value").textContent = difficulty.fastBulletSpeed.toFixed(2) + "x";
     }
 
-    function readDifficultyControls() {
+    function readDifficultyControls(event) {
       difficulty = core.normalizeDifficulty({
         bulletDensity:$("bullet-density").value,
         enemyDensity:$("enemy-density").value,
@@ -2687,11 +2698,17 @@
         lastObservation = currentObservation();
         return;
       }
+      // Live change: the running game switches difficulty in place. Bullet speed and enemy fire rate follow from the
+      // next shot, enemy count from the next wave. The trace records the change and a full checkpoint so replays
+      // resync here; the run is no longer benchmark-qualified.
+      game.difficulty = { ...difficulty };
+      if (event && event.type === "input") return; // record once, when the slider is released
       invalidateQualification("difficulty_changed");
-      const result = djev.invalidateController(controller, "difficulty_changed");
-      enqueueEvents(result.events);
-      addHistory("tuning", `bullets ${difficulty.bulletDensity.toFixed(2)}x · enemies ${difficulty.enemyDensity.toFixed(2)}x · fast ${Math.round(difficulty.fastBulletRatio * 100)}%`, "warn");
-      restartRun("difficulty_changed");
+      enqueueEvents([
+        { type:"difficulty_changed", tick:game.tick, wall_ms:wallMs(runState), difficulty:{ ...difficulty } },
+        { type:"checkpoint", tick:game.tick, wall_ms:wallMs(runState), hash:core.hashGame(game), checkpoint:core.serializeGame(game) },
+      ]);
+      addHistory("tuning", `live · bullets ${difficulty.bulletDensity.toFixed(2)}x · enemies ${difficulty.enemyDensity.toFixed(2)}x · fast ${Math.round(difficulty.fastBulletRatio * 100)}%`, "warn");
     }
 
     function controllerActiveForObservation() {
@@ -3924,7 +3941,7 @@
       if (copy && navigator.clipboard) navigator.clipboard.writeText($(copy.dataset.copy).textContent).catch(() => {});
     });
     $("restart-button").addEventListener("click", () => { invalidateQualification("reset"); restartRun(); });
-    ["bullet-density","enemy-density","fast-bullet-ratio","fast-bullet-speed"].forEach((id) => $(id).addEventListener("input", readDifficultyControls));
+    ["bullet-density","enemy-density","fast-bullet-ratio","fast-bullet-speed"].forEach((id) => { $(id).addEventListener("input", readDifficultyControls); $(id).addEventListener("change", readDifficultyControls); });
 
     syncDifficultyControls();
     bootstrap();

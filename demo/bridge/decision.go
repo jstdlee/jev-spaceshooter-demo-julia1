@@ -651,8 +651,10 @@ func buildUpstreamPayload(model, promptText string, packed, pathCriteria, bombCr
 		return NewOrderedMap().Set("type", "choice").Set("instructions", instructions).Set("criteria", criteria)
 	}
 	path := question(pathInstructions, pathCriteria)
+	bomb := question(bombInstructions, bombCriteria)
 	if flavor == "julia" {
 		path.Set("option_questions", pathOptionQuestions())
+		bomb.Set("option_questions", bombOptionQuestions())
 	}
 	payload := NewOrderedMap().
 		Set("model", model).
@@ -661,7 +663,7 @@ func buildUpstreamPayload(model, promptText string, packed, pathCriteria, bombCr
 		Set("questions", NewOrderedMap().
 			Set("path", path).
 			Set("fire", question(fireInstructions, choiceCriteria(FireIDs, FireDescriptions))).
-			Set("bomb", question(bombInstructions, bombCriteria)))
+			Set("bomb", bomb))
 	if flavor != "laya" {
 		payload.Set("samples", 1).Set("steps", 1)
 	}
@@ -676,6 +678,20 @@ func buildUpstreamPayload(model, promptText string, packed, pathCriteria, bombCr
 func pathOptionQuestions() []any {
 	return []any{
 		NewOrderedMap().Set("type", "noul").Set("instructions", "Is this the right answer?").Set("weight", 1),
+		NewOrderedMap().Set("type", "score").Set("instructions", "What happens to the ship?").
+			Set("levels", []any{"the ship is destroyed", "the ship is trapped", "the ship survives with difficulty", "the ship is completely safe"}).
+			Set("weight", 3),
+	}
+}
+
+// bombOptionQuestions stops Julia 1 wasting bombs: "right answer" alone detonated on
+// "Rank 2 WASTE ... destroys N bullets" labels (the word "destroys" attracts it). Adding
+// "Is this the rank 1 choice?" and the outcome score held on 151/151 recorded wasted-bomb
+// states and still detonated in 96% of "Rank 1 USE NOW" emergencies (offline, 2026-09-29).
+func bombOptionQuestions() []any {
+	return []any{
+		NewOrderedMap().Set("type", "noul").Set("instructions", "Is this the right answer?").Set("weight", 1),
+		NewOrderedMap().Set("type", "noul").Set("instructions", "Is this the rank 1 choice?").Set("weight", 2),
 		NewOrderedMap().Set("type", "score").Set("instructions", "What happens to the ship?").
 			Set("levels", []any{"the ship is destroyed", "the ship is trapped", "the ship survives with difficulty", "the ship is completely safe"}).
 			Set("weight", 3),
