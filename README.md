@@ -15,18 +15,18 @@ game on a self-hosted 26B djev-spark endpoint. That repo stays untouched; this o
 
 ## Demo videos
 
-Real-time recordings, 1200×1200, autopilot only (no manual input). Each difficulty level sets all four threat
-sliders to that fraction of their range. Recorded 2026-09-28, one run per level, 60-second cap:
+Real-time recordings, 1200×1200, autopilot only (no manual input, auto ramp off). Each difficulty level sets all four
+threat sliders to that fraction of their range. Recorded 2026-09-29 on engine v13 (home zone, pickup magnet, splash
+shells, missile interception), one run per level, 60-second cap:
 
 | Level | Bullets · enemies · fast bullets · fast speed | Outcome | Video | Screenshot |
 | --- | --- | --- | --- | --- |
-| 1/3 | 3.25× · 2.75× · 35% · 2.3× | died at 57.6 s, score 1,992 | [MP4, 6.8 MB](docs/media/julia1/difficulty-1-3.mp4) | [PNG](docs/media/julia1/difficulty-1-3.png) |
-| 1/2 | 4.5× · 3.5× · 50% · 3.0× | survived 60 s, score 3,260 | [MP4, 7.7 MB](docs/media/julia1/difficulty-1-2.mp4) | [PNG](docs/media/julia1/difficulty-1-2.png) |
-| 3/4 | 6.25× · 4.75× · 75% · 3.9× | died at 41.8 s, score 1,052 | [MP4, 4.6 MB](docs/media/julia1/difficulty-3-4.mp4) | [PNG](docs/media/julia1/difficulty-3-4.png) |
-| 4/4 | 8× · 6× · 100% · 4.8× | died at 32.1 s, score 1,068 | [MP4, 3.5 MB](docs/media/julia1/difficulty-4-4.mp4) | [PNG](docs/media/julia1/difficulty-4-4.png) |
+| 1/3 | 3.25× · 2.75× · 35% · 2.3× | survived 60 s, wave 5, score 3,276 | [MP4, 7.7 MB](docs/media/julia1/difficulty-1-3.mp4) | [PNG](docs/media/julia1/difficulty-1-3.png) |
+| 1/2 | 4.5× · 3.5× · 50% · 3.0× | survived 60 s, wave 4, score 3,316 | [MP4, 7.9 MB](docs/media/julia1/difficulty-1-2.mp4) | [PNG](docs/media/julia1/difficulty-1-2.png) |
+| 3/4 | 6.25× · 4.75× · 75% · 3.9× | survived 60 s, wave 4, score 3,660 | [MP4, 8.2 MB](docs/media/julia1/difficulty-3-4.mp4) | [PNG](docs/media/julia1/difficulty-3-4.png) |
+| 4/4 | 8× · 6× · 100% · 4.8× | survived 60 s, wave 3, score 3,168 | [MP4, 7.8 MB](docs/media/julia1/difficulty-4-4.mp4) | [PNG](docs/media/julia1/difficulty-4-4.png) |
 
-These are single runs, not benchmarks: the 1/3 run dying while the 1/2 run survived shows how much one run varies.
-Controlled numbers are under [Results](#results).
+These are single runs, not benchmarks; controlled numbers are under [Results](#results).
 
 ## Why Julia 1
 

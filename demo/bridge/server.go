@@ -325,8 +325,7 @@ func (s *Server) StartRun(body any) (map[string]any, error) {
 	s.runsMu.Lock()
 	s.runs[runID] = run
 	s.runsMu.Unlock()
-	absolute, _ := filepath.Abs(eventsPath)
-	return map[string]any{"schema_version": SchemaVersion, "run_id": runID, "prompt_version": run.PromptVersion, "prompt_hash": promptHash, "trace_path": absolute}, nil
+	return map[string]any{"schema_version": SchemaVersion, "run_id": runID, "prompt_version": run.PromptVersion, "prompt_hash": promptHash, "trace_path": s.displayTracePath(eventsPath)}, nil
 }
 
 func nullDecision(request *DecisionRequest, id string, apiOK bool, errText string, latencyMs float64) map[string]any {
@@ -762,6 +761,20 @@ func (s *Server) EndRun(body any) (map[string]any, error) {
 	}, true); err != nil {
 		return nil, err
 	}
-	absolute, _ := filepath.Abs(run.EventsPath)
-	return map[string]any{"schema_version": SchemaVersion, "run_id": run.RunID, "complete": true, "trace_path": absolute, "summary": summary}, nil
+	return map[string]any{"schema_version": SchemaVersion, "run_id": run.RunID, "complete": true, "trace_path": s.displayTracePath(run.EventsPath), "summary": summary}, nil
+}
+
+// displayTracePath reports a trace file relative to the repository (e.g. demo/runs/<id>/events.jsonl), so the page,
+// screenshots and recordings never show the machine's home directory. A runs directory outside the repository is
+// reported by its own name only.
+func (s *Server) displayTracePath(eventsPath string) string {
+	root := filepath.Dir(filepath.Dir(s.cfg.HTMLPath))
+	if absRoot, err := filepath.Abs(root); err == nil {
+		if absEvents, err := filepath.Abs(eventsPath); err == nil {
+			if rel, err := filepath.Rel(absRoot, absEvents); err == nil && !strings.HasPrefix(rel, "..") {
+				return filepath.ToSlash(rel)
+			}
+		}
+	}
+	return filepath.ToSlash(filepath.Join(filepath.Base(s.cfg.RunsDir), filepath.Base(filepath.Dir(eventsPath)), filepath.Base(eventsPath)))
 }
