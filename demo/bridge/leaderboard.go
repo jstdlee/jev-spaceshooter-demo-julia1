@@ -79,6 +79,9 @@ func rankEntries(entries []LeaderboardEntry) {
 }
 
 func top(entries []LeaderboardEntry) []LeaderboardEntry {
+	if entries == nil {
+		return []LeaderboardEntry{}
+	}
 	if len(entries) > leaderboardShown {
 		return entries[:leaderboardShown]
 	}

@@ -452,13 +452,17 @@ test('the wave briefing uses real values and wraps into prompt lines', () => {
   const { adapter } = loadBrowserAdapter(loadModules(), null, null);
   const game = core.createGame({ seed: 1, difficulty: { bulletDensity: 3, enemyDensity: 1.2, fastBulletRatio: 0, fastBulletSpeed: 1.6 } });
   game.wave = 5;
-  assert.deepEqual([...adapter.waveBriefing(game, 14)], ['SECTOR 05', 'HOSTILES 14', 'THREAT 2.1x', 'EXTRA LIFE IN 1 WAVE']);
+  // v15: the stage's mission, its 3-minute clock, and the strike when it is available.
+  const mission = `MISSION: ${game.mission.text.toUpperCase()}`;
+  assert.deepEqual([...adapter.waveBriefing(game, 14)], ['SECTOR 05', mission, 'STAGE 3:00', 'HOSTILES 14', 'THREAT 2.1x', 'EXTRA LIFE IN 1 WAVE', 'ASSIST STRIKE READY']);
   game.wave = 1;
-  assert.equal(adapter.waveBriefing(game, 7)[3], 'EXTRA LIFE IN 5 WAVES');
+  assert.equal(adapter.waveBriefing(game, 7)[5], 'EXTRA LIFE IN 5 WAVES');
   game.wave = 6;
   assert.equal(adapter.wavesToExtraLife(6), 5);
   game.player.lives = 5;
-  assert.equal(adapter.waveBriefing(game, 7)[3], 'LIVES MAX');
+  game.assist.charges = 0;
+  assert.equal(adapter.waveBriefing(game, 7)[5], 'LIVES MAX');
+  assert.equal(adapter.waveBriefing(game, 7).length, 6, 'no strike line once it is used');
   const lines = adapter.briefingLines(['SECTOR 05', 'HOSTILES 14', 'THREAT 2.1x', 'EXTRA LIFE IN 1 WAVE'], (text) => text.length <= 30);
   assert.deepEqual([...lines], ['> SECTOR 05 // HOSTILES 14', '> THREAT 2.1x', '> EXTRA LIFE IN 1 WAVE']);
   assert.deepEqual([...adapter.briefingLines(['A', 'B'], () => true)], ['> A // B']);

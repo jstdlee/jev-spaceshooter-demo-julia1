@@ -247,6 +247,15 @@
     .press-enter { text-align:center; font:10px/1 var(--pixel); color:var(--y); animation:blink 1s steps(2) infinite; margin-top:4px; }
     .overlay-foot { margin-top:10px; text-align:center; color:var(--g); font:16px/1 var(--crt); }
     .guide-close { position:absolute; top:10px; right:10px; z-index:1; background:var(--k); color:var(--c); }
+    .ranking-form { display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin:12px 0; font:18px/1.2 var(--crt); color:var(--s); }
+    .ranking-form input { font:18px var(--crt); background:var(--k); color:var(--y); border:2px solid var(--c); padding:4px 8px; width:12em; max-width:100%; }
+    .ranking-form[hidden] { display:none; }
+    .ranking-table { width:100%; border-collapse:collapse; font:18px/1.35 var(--crt); color:var(--s); }
+    .ranking-table th { text-align:left; color:var(--c); border-bottom:2px solid var(--d); padding:2px 6px; }
+    .ranking-table td { padding:2px 6px; border-bottom:1px dotted var(--d); }
+    .ranking-table td.num { text-align:right; font-variant-numeric:tabular-nums; }
+    .ranking-table tr.me td { color:var(--y); }
+    #ranking-result { color:var(--l); }
     #guide-button { background:var(--s); }
 
     /* Touch controls: only in manual mode on touch devices. Over the arena corners on the desktop frames, below it on phones. */
@@ -339,6 +348,9 @@
             <div><span class="label">Run</span><span class="value" id="hud-run">starting</span></div>
             <div class="wide"><span class="label">Weapon</span><span class="value" id="hud-weapon">Lv 0</span></div>
             <div class="wide"><span class="label">Supply · escort</span><span class="value" id="hud-pickups">0 bomb · 0 weapon · 0 M</span></div>
+            <div><span class="label">Shields</span><span class="value" id="hud-shields">◇◇◇◇</span></div>
+            <div><span class="label">Strike</span><span class="value" id="hud-strike">READY</span></div>
+            <div class="wide"><span class="label">Stage · mission</span><span class="value" id="hud-mission">—</span></div>
           </div>
         </div>
         <div class="controls">
@@ -346,6 +358,7 @@
           <button id="pause-button">Pause</button>
           <button id="restart-button">Restart run</button>
           <button id="guide-button" aria-haspopup="dialog">? Controls</button>
+          <button id="ranking-button" aria-haspopup="dialog">Ranking</button>
           <button id="provider-button" aria-haspopup="dialog" title="Choose the decision API (provider, model, API key)">⚙ API: default</button>
           <span id="http-warning" class="http-warning">This page is open as a local file, so djev and trace HTTP endpoints are unreachable. Serve it from the bridge URL for model-controlled evidence; local file play remains neutral hold plus cease.</span>
           <span class="sub">Manual input, pause, reset, difficulty changes (including auto ramp), or lag invalidate benchmark qualification for the active run.</span>
@@ -416,8 +429,9 @@
         <div><canvas class="legend-sprite" data-sprite="wingman_pickup" data-tint="W" width="36" height="36"></canvas><span><b>F escort jet</b>: orbits the ship and fires outward from its ring</span></div>
         <div><canvas class="legend-sprite" data-sprite="missile_pickup" data-tint="M" width="36" height="36"></canvas><span><b>M missile pod</b>: +1 homing missile in flight (8 max)</span></div>
         <div><span class="magnet-icon" aria-hidden="true">(·)</span><span><b>Magnet</b> pulls nearby pickups in; no need to touch them</span></div>
+        <div><canvas class="legend-sprite" data-sprite="shield_pickup" data-tint="C" width="36" height="36"></canvas><span><b>Shield</b> (rare): absorbs one hit, stacks to 4 (cyan · green · magenta · gold)</span></div>
       </div>
-      <p class="intro-text" style="font-size:18px;margin-top:10px">Clear every 5th wave for an extra life (5 max). In autopilot the threat level steps up every 10 waves (AUTO RAMP).</p>
+      <p class="intro-text" style="font-size:18px;margin-top:10px">Each wave is a 3-minute stage with a random mission (bonus score and a bomb). One <b>assistance strike</b> per 10 waves sweeps the whole field from bottom to top; the model calls it when the bullet field goes wild. Every 5th wave adds a life (5 max).</p>
       <div class="intro-h guide-h">Manual controls</div>
       <div class="keys" id="intro-keys"></div>
       <div class="intro-buttons">
@@ -426,6 +440,24 @@
       </div>
       <div class="press-enter">Press Enter</div>
       <div class="overlay-foot">Enter = autopilot · M = fly manually · manual input marks the run as not benchmark-qualified</div>
+    </div>
+  </div>
+  <div id="ranking" class="overlay" role="dialog" aria-modal="true" aria-labelledby="ranking-title">
+    <div class="overlay-card">
+      <button type="button" class="guide-close" id="ranking-close">Close</button>
+      <div class="intro-eyebrow">Hall of fame · longest flights</div>
+      <h2 id="ranking-title" class="intro-title" style="font-size:18px">Ranking board</h2>
+      <form id="ranking-form" class="ranking-form" autocomplete="off" hidden>
+        <span id="ranking-run"></span>
+        <label>Name <input id="ranking-name" maxlength="16" required></label>
+        <button type="submit" id="ranking-submit">Enter the board</button>
+      </form>
+      <div id="ranking-result" class="intro-text" style="font-size:18px"></div>
+      <table class="ranking-table">
+        <thead><tr><th>#</th><th>Name</th><th>Time</th><th>Score</th><th>Wave</th><th>Pilot</th></tr></thead>
+        <tbody id="ranking-rows"><tr><td colspan="6">loading…</td></tr></tbody>
+      </table>
+      <div class="overlay-foot">Ranked by time survived, then score · top 10 shown</div>
     </div>
   </div>
   <div id="guide" class="overlay" role="dialog" aria-modal="true" aria-labelledby="guide-title">
@@ -3292,6 +3324,17 @@
     function updateRecentFromEvents(events) {
       for (const event of events) {
         if (event.type === "boss_spawned") addHistory("boss", "boss incoming", "warn");
+        if (event.type === "shield_absorbed") {
+          shieldFlash = { x:event.player.x, y:event.player.y, layer:event.shields, until:performance.now() + 380 };
+          addHistory("shield", `shield took the hit · ${event.shields} left`, "ok");
+        }
+        if (event.type === "assist_called") addHistory("strike", `assistance strike called · ${event.bullets} bullets on screen`, "warn");
+        if (event.type === "assist_finished") addHistory("strike", "strike sweep complete", "ok");
+        if (event.type === "boss_bomb_launched") addHistory("boss", "big bomb incoming", "warn");
+        if (event.type === "mission_assigned") addHistory("mission", `wave ${event.wave}: ${event.text}`, "ok");
+        if (event.type === "mission_complete") addHistory("mission", `complete · ${event.text} · +bomb`, "ok");
+        if (event.type === "mission_failed") addHistory("mission", `failed · ${event.text}`, "warn");
+        if (event.type === "reinforcements") addHistory("wave", `reinforcements · ${event.count} ships`, "warn");
         if (event.type === "extra_life") addHistory("life", `wave ${event.wave - 1} cleared · +1 life · ${event.lives} lives`, "ok");
         if (event.type === "wave_started") {
           waveStarts.set(event.wave, event.count);
@@ -3499,6 +3542,69 @@
       }
     }
 
+    // ---- v15 ranking board (bridge: GET/POST api/leaderboard, one entry per finished run) ----
+    let rankingOpen = false;
+    let rankingCandidate = null;
+
+    function rankingTime(seconds) {
+      const s = Math.max(0, Number(seconds) || 0);
+      return `${Math.floor(s / 60)}:${(s % 60).toFixed(1).padStart(4, "0")}`;
+    }
+
+    function renderRanking(entries, highlight) {
+      const rows = (entries || []).map((entry, index) => `<tr class="${entry.run_id === highlight ? "me" : ""}"><td class="num">${index + 1}</td><td>${escapeHtml(entry.name)}</td>`
+        + `<td class="num">${rankingTime(entry.time_s)}</td><td class="num">${Number(entry.score).toLocaleString()}</td><td class="num">${entry.wave}</td><td>${entry.mode === "manual" ? "human" : "Julia 1"}</td></tr>`);
+      $("ranking-rows").innerHTML = rows.length ? rows.join("") : `<tr><td colspan="6">No runs yet: be the first.</td></tr>`;
+    }
+
+    async function loadRanking() {
+      if (isFileProtocol) { renderRanking([]); return; }
+      try {
+        const response = await fetch("api/leaderboard", { cache:"no-store" });
+        const body = await response.json();
+        renderRanking(body.entries, rankingCandidate && rankingCandidate.submitted ? rankingCandidate.run_id : null);
+      } catch (error) {
+        $("ranking-rows").innerHTML = `<tr><td colspan="6">Ranking board unavailable.</td></tr>`;
+      }
+    }
+
+    function setRanking(open) {
+      rankingOpen = open;
+      $("ranking").classList.toggle("show", open);
+      if (!open) return;
+      const candidate = rankingCandidate && !rankingCandidate.submitted ? rankingCandidate : null;
+      $("ranking-form").hidden = !candidate;
+      $("ranking-result").textContent = "";
+      if (candidate) {
+        $("ranking-run").textContent = `Your flight: ${rankingTime(candidate.time_s)} · ${candidate.score.toLocaleString()} pts · wave ${candidate.wave}`;
+        let saved = null;
+        try { saved = localStorage.getItem("jev-ranking-name"); } catch (error) { saved = null; }
+        $("ranking-name").value = saved || (candidate.mode === "manual" ? "" : "Julia 1");
+        setTimeout(() => $("ranking-name").focus?.({ preventScroll:true }), 0);
+      }
+      loadRanking();
+    }
+
+    async function submitRanking(event) {
+      event.preventDefault();
+      const candidate = rankingCandidate;
+      if (!candidate || candidate.submitted) return;
+      const name = $("ranking-name").value.trim();
+      try {
+        const response = await fetch("api/leaderboard", { method:"POST", headers:{ "Content-Type":"application/json" },
+          body:JSON.stringify({ run_id:candidate.run_id, name, time_s:candidate.time_s, score:candidate.score, wave:candidate.wave, mode:candidate.mode, reason:candidate.reason }) });
+        const body = await response.json();
+        if (!response.ok) { $("ranking-result").textContent = body.error || `could not enter (${response.status})`; return; }
+        candidate.submitted = true;
+        try { localStorage.setItem("jev-ranking-name", name); } catch (error) { /* per-viewer convenience only */ }
+        $("ranking-form").hidden = true;
+        $("ranking-result").textContent = `Entered at #${body.rank}.`;
+        renderRanking(body.entries, candidate.run_id);
+      } catch (error) {
+        $("ranking-result").textContent = "Ranking board unavailable.";
+      }
+    }
+
     function endRun(reason, run = runState) {
       if (!run) return Promise.resolve();
       if (run.finalization) return run.finalization;
@@ -3541,6 +3647,12 @@
           if (result.run_id !== run.id || !result.complete) throw new Error("run_end_incomplete");
           run.complete = true;
           if (run.qualification.valid) run.qualification.reason = `trace complete · ${terminalBase.reason}`;
+          // A run that ended by the game itself (not a restart) can enter the ranking board.
+          if (reason === "death") {
+            rankingCandidate = { run_id:run.id, time_s:Math.round(terminalBase.sim_ms / 100) / 10, score:terminalBase.score, wave:terminalBase.wave,
+              mode:run.qualification.reason && /manual/.test(run.qualification.reason) ? "manual" : autopilot ? "autopilot" : "manual", reason, submitted:false };
+            setRanking(true);
+          }
         } catch (error) {
           invalidateQualification("trace_end_failed", run);
         }
@@ -3668,6 +3780,14 @@
       $("hud-weapon").title = $("hud-weapon").textContent;
       $("hud-pickups").textContent = `${game.counters.bombPickups} bomb · ${game.counters.weaponPickups} weapon · ${game.counters.missilePickups || 0} M · ${game.wingmen}/${core.WINGMAN.max} jets${game.boss.active_id ? " · BOSS" : ""}`;
       $("hud-missiles").textContent = `${game.playerMissiles.length}/${core.missileCap(game)} · ${game.counters.missileKills} kills`;
+      $("hud-shields").textContent = "◆".repeat(game.shields || 0) + "◇".repeat(Math.max(0, core.SHIELD.max - (game.shields || 0)));
+      $("hud-strike").textContent = !game.assist ? "—" : game.assist.sweep_y !== null ? "SWEEPING" : game.assist.charges > 0 ? `READY (to wave ${(game.assist.block + 1) * core.ASSIST.every_waves})` : `used · next wave ${(game.assist.block + 1) * core.ASSIST.every_waves + 1}`;
+      if (game.mission) {
+        const left = Math.max(0, core.STAGE.duration_s - game.waveClock_s);
+        const m = game.mission;
+        const progress = m.kind === "flawless" || m.kind === "no_bomb" ? "" : ` ${m.progress}/${m.target}`;
+        $("hud-mission").textContent = `${Math.floor(left / 60)}:${String(Math.floor(left % 60)).padStart(2, "0")} · ${m.text}${progress} · ${m.status}`;
+      }
       $("selected").textContent = lastSelected;
       $("executed").textContent = currentExecutingText();
       $("request-status").textContent = controller.pending ? `pending · E${controller.epoch}/S${controller.pending.sequence}` : `idle · E${controller.epoch}`;
@@ -3813,6 +3933,16 @@
       missile_pickup:{ rows:[
         ".##########.", "##KKKKKKKK##", "#KWKKKKKKWK#", "#KWWKKKKWWK#", "#KWKWKKWKWK#", "#KWKKWWKKWK#", "#KWKKKKKKWK#",
         "#KWKKKKKKWK#", "##KKKKKKKK##", ".##########." ] },
+      // v15 art: a second look for each enemy class (every other three waves) and three boss designs.
+      // "Dart" scout, "Wasp" swarm, "Crab" tank.
+      scout_b:{ half:[ "......CC", "....CCTW", ".C.CTTTC", "CTCTBBTT", "CTTBBGGB", ".CTBGCCG", "..TBGCWC", "..TBBGCC", ".CTB..BG", "CT....RB", "C......R" ] },
+      swarm_b:{ half:[ "Y.....", "YY..KK", ".YYKYY", "..KYYK", ".KYYKY", "KYYKYY", "K..KYK", "...R.K", "..R..." ] },
+      tank_b:{ half:[ "..EE........", ".ELLE....EEE", "ELLLLE..ELLL", "ELEELLEELLLL", ".E..ELLLLGGG", "....ELLLGGDD", "...ELLLGDDCC", "...ELLGDDCWW", "...ELLGDDCCC", "....ELLGGDDD", "....EELLLGGG", "...EE.EELLLL", "..EE....EEEE", "..Y.......YY" ] },
+      // "Mantis" and "Hydra" bosses (the original is the "Dreadnought").
+      boss_b:{ half:[ "......................EE", "....................EELL", "..................EELLLL", "EE..............EELLLLLL", "LLE...........EELLGGGGGG", ".LLE........EELLGGDDDDDD", "..LLE.....EELLGGDDCCCCCC", "...LLE...ELLGGDDCCWWWWWW", "....LLEEELLGGDDCCWWKKKKK", ".....LLLLLGGDDCCWWKKRRRR", "......LLLGGDDCCWWKKRRYYY", ".......LGGDDCCWWKKRRYYWW", "........GGDDCCWWKKRRYYWW", ".......LGGDDCCWWKKRRYYYY", "......LLLGGDDCCWWKKRRRRR", ".....LLE.LGGDDCCWWKKKKKK", "....LLE...LGGDDCCWWWWWWW", "...LLE.....LGGDDCCCCCCCC", "..LLE.......LGGDDDDDDDDD", ".LLE.........LGGGGGGGGGG", "LLE...........LLLLLLLLLL", "EE.............EE.EE.EEE", "................L..L..L.", "................Y..Y..Y.", "................O..O..O." ] },
+      boss_c:{ half:[ "...RR..........RR.......", "..RYYR........RYYR......", "..RWWR........RWWR......", "..RRRR........RRRR......", "...PP..........PP.......", "...PP..........PP.....PP", "...PPP........PPP....PMM", "....PPP......PPP....PMMM", ".....PPPPPPPPPP....PMMMM", "......PPMMMMMMPPPPPMMMMM", ".....PPMMRRRRMMMMMMMMMMM", "....PPMMRRYYRRMMMMMDDDDD", "...PPMMRRYWWYRRMMMDGGGGG", "...PMMRRYWWWWYRRMDGRRRRR", "...PMMRRYWWWWYRRMDGROOOO", "...PMMRRYYWWYYRRMDGROYYY", "....PMMRRYYYYRRMMDGROYWW", ".....PMMRRRRRRMMMDGROYYY", "......PMMMMMMMMMDDGROOOO", ".......PPMMMMMMDGGRRRRRR", "........PPPPPPDGGGGGGGGG", ".........P..P.DDDDDDDDDD", "........PP..PP..P....P..", ".......PP....PP.Y....Y..", "......YY......YY.O....O." ] },
+      shield_pickup:{ rows:[ "....####....", "..##CCCC##..", ".#CCWWWWCC#.", ".#CWCCCCWC#.", "#CWC####CWC#", "#CWC#WW#CWC#", "#CWC#WW#CWC#", ".#CWC##CWC#.", ".#CCWCCWCC#.", "..##CWWC##..", "....#CC#....", ".....##....." ] },
+      big_bomb:{ rows:[ ".....KKK.....", "...KK###KK...", "..K#######K..", ".K##OOOOO##K.", ".K#OOYYYOO#K.", "K##OYYWYYO##K", "K##OYWWWYO##K", "K##OYYWYYO##K", ".K#OOYYYOO#K.", ".K##OOOOO##K.", "..K#######K..", "...KK###KK...", ".....KKK....." ] },
       wingman:{ odd:true, half:[ "...L", "..LW", "L.LL", "LLEL", "L.EE", "...O" ] },
       missile:{ rows:[ ".#.", "#W#", "GWG", "GWG", "G.G", ".Y.", ".O." ] },
       enemy_missile:{ rows:[ "..R..", ".RWR.", ".RRR.", "RDRDR", "R.R.R", "..Y..", "..O.." ] },
@@ -4058,7 +4188,9 @@
     function waveBriefing(state, hostiles) {
       const n = wavesToExtraLife(state.wave);
       const life = state.player.lives >= core.EXTRA_LIFE.max_lives ? "LIVES MAX" : `EXTRA LIFE IN ${n} WAVE${n === 1 ? "" : "S"}`;
-      return [`SECTOR ${String(state.wave).padStart(2, "0")}`, `HOSTILES ${hostiles}`, `THREAT ${threatMultiplier(state.difficulty).toFixed(1)}x`, life];
+      const mission = state.mission ? [`MISSION: ${state.mission.text.toUpperCase()}`] : [];
+      const strike = state.assist && state.assist.charges > 0 ? ["ASSIST STRIKE READY"] : [];
+      return [`SECTOR ${String(state.wave).padStart(2, "0")}`, ...mission, `STAGE ${core.STAGE.duration_s / 60}:00`, `HOSTILES ${hostiles}`, `THREAT ${threatMultiplier(state.difficulty).toFixed(1)}x`, life, ...strike];
     }
 
     // Greedy wrap of " // "-joined segments into terminal lines, each with a "> " prompt.
@@ -4148,6 +4280,70 @@
       lctx.globalAlpha = 1;
     }
 
+    // ---- v15 visuals ----
+    // Shield colours by layer: cyan, green, magenta, gold.
+    const SHIELD_TINTS = ["C", "L", "M", "Y"];
+    let shieldFlash = null;
+
+    function enemySpriteFor(enemy) {
+      const base = enemy.type === "tank" ? "tank" : enemy.type === "swarm" ? "swarm" : "scout";
+      return Math.floor((game.wave - 1) / 3) % 2 === 1 ? `${base}_b` : base;
+    }
+
+    function bossSpriteFor(enemy) {
+      const n = Number(String(enemy.id).replace(/\D+/g, "")) || 0;
+      return ["boss", "boss_b", "boss_c"][n % 3];
+    }
+
+    // Each shield is a ring of shimmering pixels: a travelling wave of light runs round it (a pixel "shader": brightness
+    // from the angle and time), outer layers turn the other way, and a hit flashes an expanding burst.
+    function drawShields(nowMs) {
+      const count = game.shields || 0;
+      const cx = lx(game.player.x);
+      const cy = lx(game.player.y);
+      for (let layer = 0; layer < count; layer += 1) {
+        const radius = 13 + layer * 3;
+        const dir = layer % 2 ? -1 : 1;
+        const points = 26 + layer * 6;
+        const t = nowMs / (420 - layer * 60);
+        for (let i = 0; i < points; i += 1) {
+          const angle = i / points * Math.PI * 2;
+          const light = Math.sin(angle * 3 + dir * t) * .5 + .5;
+          const shimmer = Math.sin(angle * 7 - dir * t * 1.7) * .5 + .5;
+          if (light < .25) continue;
+          const color = light > .92 ? "W" : shimmer > .7 ? SHIELD_TINTS[layer] : light > .55 ? SHIELD_TINTS[layer] : "D";
+          px(Math.round(cx + Math.cos(angle) * radius), Math.round(cy + Math.sin(angle) * radius), 1, 1, color);
+        }
+      }
+      if (count > 0) {
+        lctx.globalAlpha = .10 + .05 * Math.sin(nowMs / 200);
+        lctx.fillStyle = PALETTE[SHIELD_TINTS[count - 1]];
+        lctx.beginPath();
+        lctx.arc(cx, cy, 13 + (count - 1) * 3, 0, Math.PI * 2);
+        lctx.fill();
+        lctx.globalAlpha = 1;
+      }
+      if (shieldFlash && nowMs < shieldFlash.until) {
+        const left = (shieldFlash.until - nowMs) / 380;
+        pixelRing(lx(shieldFlash.x), lx(shieldFlash.y), 12 + (1 - left) * 16, left > .5 ? "W" : SHIELD_TINTS[shieldFlash.layer] || "C", 1);
+      }
+    }
+
+    // The assistance strike: a white-hot line rising from the bottom, a squadron of jets riding it, fire below it.
+    function drawAssistSweep(nowMs) {
+      if (!game.assist || game.assist.sweep_y === null) return;
+      const y = lx(game.assist.sweep_y);
+      for (let x = 0; x < LO_W; x += 1) {
+        const jitter = (x * 7 + Math.floor(nowMs / 30)) % 5;
+        px(x, y - 1, 1, 1, jitter ? "Y" : "W");
+        px(x, y, 1, 2, "W");
+        px(x, y + 2, 1, 1, jitter > 2 ? "O" : "R");
+        if ((x * 13 + Math.floor(nowMs / 40)) % 9 === 0) px(x, y + 4 + (x % 6), 1, 2, x % 2 ? "O" : "R");
+      }
+      for (let i = 0; i < 7; i += 1) blit(sprite("wingman_pickup"), (i + .5) * W / 7, game.assist.sweep_y + 14);
+      if (Math.floor(nowMs / 200) % 2 === 0) pixelText("ASSIST STRIKE", LO_W / 2, LO_H / 2 - 30, 16, "Y", "center", "R");
+    }
+
     function draw() {
       ensureRetroSurfaces();
       const nowMs = performance.now();
@@ -4170,21 +4366,7 @@
       });
       trackBlasts(nowMs);
 
-      // Home zone: the central 3/4 of the arena (the bridge's zoneMin/Max constants). Safe moves that end outside it
-      // without heading back rank one tier lower, so the ship returns when it safely can. A faint dotted frame with
-      // corner brackets; it turns amber and blinks while the ship is outside.
-      {
-        const zone = { x0:lx(120), x1:lx(840), y0:lx(77.5), y1:lx(542.5) };
-        const out = game.player.x < 120 || game.player.x > 840 || game.player.y < 77.5 || game.player.y > 542.5;
-        const tone = out ? (blink ? "Y" : "O") : "D";
-        for (let x = zone.x0; x <= zone.x1; x += 6) { px(x, zone.y0, 1, 1, tone); px(x, zone.y1, 1, 1, tone); }
-        for (let y = zone.y0; y <= zone.y1; y += 6) { px(zone.x0, y, 1, 1, tone); px(zone.x1, y, 1, 1, tone); }
-        const bracket = out ? tone : "T";
-        for (const [cx, cy, sx, sy] of [[zone.x0, zone.y0, 1, 1], [zone.x1, zone.y0, -1, 1], [zone.x0, zone.y1, 1, -1], [zone.x1, zone.y1, -1, -1]]) {
-          px(Math.min(cx, cx + sx * 5), cy, 6, 1, bracket);
-          px(cx, Math.min(cy, cy + sy * 5), 1, 6, bracket);
-        }
-      }
+      // v15: no home zone. The ship is only kept off the walls and out of the corners (bridge positionScore).
 
       // Player gun: chunky bolts coloured by weapon level; escort-jet shots are smaller.
       // Rapid fire (level 3) is a thin cyan needle with a white tip; explosive shells (level 4+) are round
@@ -4243,6 +4425,7 @@
         if (pickup.kind === "wingman") blit(sprite("wingman_pickup"), pickup.x, pickup.y + bob);
         else if (pickup.kind === "missile") blit(sprite("missile_pickup", Math.sin(nowMs / 140) > 0 ? "M" : "P"), pickup.x, pickup.y + bob);
         else if (pickup.kind === "bomb") blit(sprite("bomb", Math.sin(nowMs / 160) > 0 ? "O" : "Y"), pickup.x, pickup.y + bob);
+        else if (pickup.kind === "shield") blit(sprite("shield_pickup", SHIELD_TINTS[Math.floor(nowMs / 180) % SHIELD_TINTS.length]), pickup.x, pickup.y + bob);
         else blit(sprite("weapon", RAINBOW[Math.floor(pickup.hue / 360 * RAINBOW.length + nowMs / 110) % RAINBOW.length]), pickup.x, pickup.y + bob);
         lctx.globalAlpha = 1;
       });
@@ -4273,7 +4456,7 @@
       game.enemies.forEach((enemy) => {
         drawSplashMark(enemy, nowMs);
         if (enemy.type === "boss") {
-          blit(sprite("boss"), enemy.x, enemy.y);
+          blit(sprite(bossSpriteFor(enemy)), enemy.x, enemy.y);
           const barX = lx(enemy.x - enemy.w / 2);
           const barY = lx(enemy.y - enemy.h / 2 - 10);
           const barW = lx(enemy.w);
@@ -4282,7 +4465,7 @@
           px(barX, barY, barW, 3, "D");
           px(barX, barY, Math.round(barW * ratio), 3, ratio < .3 ? "R" : "Y");
         } else {
-          blit(sprite(enemy.type === "tank" ? "tank" : enemy.type === "swarm" ? "swarm" : "scout"), enemy.x, enemy.y);
+          blit(sprite(enemySpriteFor(enemy)), enemy.x, enemy.y);
         }
       });
       blasts.forEach((blast) => drawBlast(blast, nowMs));
@@ -4301,15 +4484,35 @@
         blit(rotatedSprite("enemy_missile", missile.heading + Math.PI / 2), missile.x, missile.y);
       });
 
+      (game.bossBombs || []).forEach((shell) => {
+        const late = shell.age_s > core.BOSS.big_bomb.fuse_s * .6;
+        blit(sprite("big_bomb", late && blink ? "W" : "R"), shell.x, shell.y);
+        if (late) pixelRing(lx(shell.x), lx(shell.y), 9 + (Math.floor(nowMs / 90) % 3), blink ? "Y" : "O", 1);
+      });
+
       if (!(game.player.invincible_s > 0 && Math.floor(game.player.invincible_s * 12) % 2 === 0)) {
         blit(sprite(Math.floor(nowMs / 80) % 2 ? "player_a" : "player_b"), game.player.x, game.player.y);
       }
+      drawShields(nowMs);
+      drawAssistSweep(nowMs);
 
       // Arcade marquee text inside the tube.
       pixelText(`SCORE ${String(game.score).padStart(7, "0")}`, 6, 5, 8, "W");
       pixelText(`WAVE ${String(game.wave).padStart(2, "0")}`, LO_W - 6, 5, 8, "C", "right");
       for (let i = 0; i < Math.max(0, game.player.lives); i += 1) lctx.drawImage(sprite("player_b"), 6 + i * 15, LO_H - 16);
       for (let i = 0; i < game.bomb.charges; i += 1) lctx.drawImage(sprite("bomb", "O"), LO_W - 18 - i * 14, LO_H - 15);
+      for (let i = 0; i < (game.shields || 0); i += 1) lctx.drawImage(sprite("shield_pickup", SHIELD_TINTS[i]), 6 + Math.max(0, game.player.lives) * 15 + 4 + i * 14, LO_H - 15);
+      if (game.assist) {
+        const ready = game.assist.charges > 0 && game.assist.sweep_y === null;
+        pixelText(ready ? "STRIKE READY" : game.assist.sweep_y !== null ? "STRIKE!" : "STRIKE USED", LO_W / 2, LO_H - 12, 8, ready ? "L" : game.assist.sweep_y !== null ? (blink ? "Y" : "O") : "D", "center");
+      }
+      if (game.mission && !introActive) {
+        const left = Math.max(0, core.STAGE.duration_s - game.waveClock_s);
+        const clock = `${Math.floor(left / 60)}:${String(Math.floor(left % 60)).padStart(2, "0")}`;
+        const m = game.mission;
+        const tail = m.status === "done" ? " DONE" : m.status === "failed" ? " FAILED" : m.kind === "flawless" || m.kind === "no_bomb" ? "" : ` ${m.progress}/${m.target}`;
+        pixelText(`${clock}  ${m.text.toUpperCase()}${tail}`, LO_W / 2, 16, 8, m.status === "done" ? "L" : m.status === "failed" ? "R" : "Y", "center");
+      }
       if (game.boss.active_id && blink && !game.terminal) pixelText("WARNING: BOSS", LO_W / 2, 5, 8, "R", "center");
 
       drawWaveBanner(nowMs);
@@ -4498,6 +4701,11 @@
     function onKeyDown(event) {
       const key = event.key.toLowerCase();
       const onControl = event.target && /^(button|input|select|textarea)$/i.test(event.target.tagName || "");
+      // The ranking board takes the keyboard (the name field); Escape closes it.
+      if (rankingOpen) {
+        if (key === "escape") { event.preventDefault(); setRanking(false); }
+        return;
+      }
       if (guideOpen) {
         if (key === "escape" || key === "h" || key === "?") { event.preventDefault(); setGuide(false); }
         return;
@@ -4661,6 +4869,9 @@
     $("guide-button").addEventListener("click", () => setGuide(true));
     initProviderSettings();
     $("guide-close").addEventListener("click", () => setGuide(false));
+    $("ranking-close").addEventListener("click", () => setRanking(false));
+    $("ranking-button").addEventListener("click", () => setRanking(true));
+    $("ranking-form").addEventListener("submit", submitRanking);
     $("guide").addEventListener("click", (event) => { if (event.target === event.currentTarget) setGuide(false); });
     $("intro-auto").addEventListener("click", () => startFromIntro("auto"));
     $("intro-manual").addEventListener("click", () => startFromIntro("manual"));
