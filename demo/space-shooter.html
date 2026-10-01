@@ -251,10 +251,13 @@
     .ranking-form { display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin:12px 0; font:18px/1.2 var(--crt); color:var(--s); }
     .ranking-form input { font:18px var(--crt); background:var(--k); color:var(--y); border:2px solid var(--c); padding:4px 8px; width:12em; max-width:100%; }
     .ranking-form[hidden] { display:none; }
-    .ranking-table { width:100%; border-collapse:collapse; font:18px/1.35 var(--crt); color:var(--s); }
-    .ranking-table th { text-align:left; color:var(--c); border-bottom:2px solid var(--d); padding:2px 6px; }
-    .ranking-table td { padding:2px 6px; border-bottom:1px dotted var(--d); }
-    .ranking-table td.num { text-align:right; font-variant-numeric:tabular-nums; }
+    .ranking-table { width:100%; border-collapse:collapse; table-layout:fixed; font:18px/1.35 var(--crt); color:var(--s); }
+    .ranking-table th, .ranking-table td { padding:2px 8px; text-align:left; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .ranking-table th { color:var(--c); border-bottom:2px solid var(--d); }
+    .ranking-table td { border-bottom:1px dotted var(--d); }
+    .ranking-table .num { text-align:right; font-variant-numeric:tabular-nums; }
+    .ranking-table col.rank { width:3em; } .ranking-table col.time { width:6em; } .ranking-table col.score { width:8em; }
+    .ranking-table col.wave { width:4.5em; } .ranking-table col.pilot { width:6.5em; }
     .ranking-table tr.me td { color:var(--y); }
     #ranking-result { color:var(--l); }
     #guide-button { background:var(--s); }
@@ -456,7 +459,8 @@
       </form>
       <div id="ranking-result" class="intro-text" style="font-size:18px"></div>
       <table class="ranking-table">
-        <thead><tr><th>#</th><th>Name</th><th>Time</th><th>Score</th><th>Wave</th><th>Pilot</th></tr></thead>
+        <colgroup><col class="rank"><col class="name"><col class="time"><col class="score"><col class="wave"><col class="pilot"></colgroup>
+        <thead><tr><th class="num">#</th><th>Name</th><th class="num">Time</th><th class="num">Score</th><th class="num">Wave</th><th>Pilot</th></tr></thead>
         <tbody id="ranking-rows"><tr><td colspan="6">loading…</td></tr></tbody>
       </table>
       <div class="overlay-foot">Ranked by time survived, then score · top 10 shown</div>
@@ -3043,10 +3047,12 @@
       $("fast-bullet-speed").value = difficulty.fastBulletSpeed;
       // v15: every slider reads as a percentage of its own range (100% = the doubled ceiling), raw value beside it.
       const pct = (key) => `${Math.round(sliderFraction(key, difficulty[key]) * 100)}%`;
-      $("bullet-density-value").textContent = `${pct("bulletDensity")} · ${difficulty.bulletDensity.toFixed(1)}x`;
-      $("enemy-density-value").textContent = `${pct("enemyDensity")} · ${difficulty.enemyDensity.toFixed(1)}x`;
-      $("fast-bullet-ratio-value").textContent = `${pct("fastBulletRatio")}`;
-      $("fast-bullet-speed-value").textContent = `${pct("fastBulletSpeed")} · ${difficulty.fastBulletSpeed.toFixed(1)}x`;
+      // One number per row (the cell is narrow): the percentage; the raw value is in the tooltip.
+      const show = (id, key, raw) => { $(id).textContent = pct(key); $(id).title = raw; };
+      show("bullet-density-value", "bulletDensity", `${difficulty.bulletDensity.toFixed(2)}x bullets`);
+      show("enemy-density-value", "enemyDensity", `${difficulty.enemyDensity.toFixed(2)}x enemies`);
+      show("fast-bullet-ratio-value", "fastBulletRatio", `${Math.round(difficulty.fastBulletRatio * 100)}% of bullets are fast`);
+      show("fast-bullet-speed-value", "fastBulletSpeed", `fast bullets fly ${difficulty.fastBulletSpeed.toFixed(2)}x`);
       $("threat-percent").textContent = `${threatPercent(difficulty)}%`;
     }
 
@@ -3464,7 +3470,7 @@
     }
 
     function renderRanking(entries, highlight) {
-      const rows = (entries || []).map((entry, index) => `<tr class="${entry.run_id === highlight ? "me" : ""}"><td class="num">${index + 1}</td><td>${escapeHtml(entry.name)}</td>`
+      const rows = (entries || []).map((entry, index) => `<tr class="${entry.run_id === highlight ? "me" : ""}"><td class="num">${index + 1}</td><td title="${escapeHtml(entry.name)}">${escapeHtml(entry.name)}</td>`
         + `<td class="num">${rankingTime(entry.time_s)}</td><td class="num">${Number(entry.score).toLocaleString()}</td><td class="num">${entry.wave}</td><td>${entry.mode === "manual" ? "human" : "Julia 1"}</td></tr>`);
       $("ranking-rows").innerHTML = rows.length ? rows.join("") : `<tr><td colspan="6">No runs yet: be the first.</td></tr>`;
     }

@@ -405,7 +405,8 @@ test('demo auto-ramp raises every threat slider through the live difficulty path
   assert.equal(game.difficulty.bulletDensity, 2.5);
   assert.equal(game.difficulty.fastBulletSpeed, 2, '10% of 1.1..9.6, above the 1.6 default');
   assert.equal(element('bullet-density').value, 2.5, 'the slider UI follows');
-  assert.equal(element('bullet-density-value').textContent, '10% · 2.5x', 'percent of the range, raw value beside it');
+  assert.equal(element('bullet-density-value').textContent, '10%', 'percent of the range');
+  assert.equal(element('bullet-density-value').title, '2.50x bullets', 'the raw value is in the tooltip');
   assert.ok(adapter.getState().history.some((row) => row.kind === 'threat' && /^THREAT UP/.test(row.text)));
   assert.equal(adapter.getState().qualification.valid, false, 'a ramped run is not benchmark-qualified');
   await adapter.drainTrace();
