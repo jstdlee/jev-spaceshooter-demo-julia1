@@ -1137,10 +1137,11 @@ func TestFutureTiersLabelsAndOracle(t *testing.T) {
 			t.Errorf("%s: label %q, want %q", tc.name, got, tc.label)
 		}
 	}
+	// v15: no wall rule of its own; a wall only matters through the sampled futures.
 	nearWall := row(1, 4)
-	nearWall.WallRoom = 40
-	if got := pathTier(nearWall); got != "OK" {
-		t.Errorf("near wall: tier %s, want OK", got)
+	nearWall.WallRoom = 10
+	if got := pathTier(nearWall); got != "GOOD" {
+		t.Errorf("near wall: tier %s, want GOOD", got)
 	}
 	// The oracle ranks by tier, then futures survived.
 	criteria := map[string]any{"a": pathLabel(row(0.95, 3)), "b": pathLabel(row(1, 4)), "c": pathLabel(row(0.7, 2))}
@@ -1149,12 +1150,12 @@ func TestFutureTiersLabelsAndOracle(t *testing.T) {
 	}
 }
 
-func TestPositionBehindDropsATier(t *testing.T) {
-	mk := func(survival, x, y float64) PathRow {
-		return PathRow{WallRoom: 200, EndX: x, EndY: y, Futures: &FutureRow{Survival: survival, Clear: 4, Futures: 4}}
+func TestCenterAnswerShapesOnlyTheSafestMoves(t *testing.T) {
+	mk := func(survival, progress float64) PathRow {
+		return PathRow{WallRoom: 200, CenterProgress: progress, Futures: &FutureRow{Survival: survival, Clear: 4, Futures: 4}}
 	}
-	rows := []PathRow{mk(1, 480, 400), mk(1, 470, 380), mk(1, 60, 590), mk(0.9, 40, 40)}
-	markPositionBehind(rows)
+	rows := []PathRow{mk(1, 25), mk(1, 22), mk(1, -20), mk(0.9, 30)}
+	markCenterBehind(rows)
 	want := []bool{false, false, true, false}
 	for i, w := range want {
 		if rows[i].PositionBehind != w {
@@ -1162,7 +1163,41 @@ func TestPositionBehindDropsATier(t *testing.T) {
 		}
 	}
 	if got := pathTier(rows[2]); got != "OK" {
-		t.Errorf("a safest move with a worse position: tier %s, want OK", got)
+		t.Errorf("a safest move heading away after a center answer: tier %s, want OK", got)
+	}
+	if got := pathLabel(rows[0]); got != "Tier 1 GOOD: safe in all 4 futures, toward center." {
+		t.Errorf("center label: %q", got)
+	}
+	// Without a center answer nothing about position reaches the tiers or the labels.
+	plain := mk(1, -40)
+	plain.WallRoom = 10
+	if got := pathLabel(plain); got != "Tier 1 GOOD: safe in all 4 futures." {
+		t.Errorf("no local position rule may apply: %q", got)
+	}
+}
+
+func TestPositionQuestionReadsTheSurroundings(t *testing.T) {
+	if buildPositionCriteria(&SurroundingsFacts{CenterDistancePx: 80, RadiusPx: 150}) != nil {
+		t.Error("near the centre the question is not asked")
+	}
+	calm := buildPositionCriteria(&SurroundingsFacts{CenterDistancePx: 300, BulletsNear: 2, RadiusPx: 150, WallDistancePx: 200})
+	if !strings.HasPrefix(calm.Get("center").(string), "Rank 1 RETURN") {
+		t.Errorf("calm and far: %v", calm.Get("center"))
+	}
+	dense := buildPositionCriteria(&SurroundingsFacts{CenterDistancePx: 300, BulletsNear: 14, RadiusPx: 150, WallDistancePx: 200})
+	if !strings.HasPrefix(dense.Get("stay").(string), "Rank 1 HOLD") {
+		t.Errorf("dense, away from walls: %v", dense.Get("stay"))
+	}
+	walled := buildPositionCriteria(&SurroundingsFacts{CenterDistancePx: 300, BulletsNear: 14, RadiusPx: 150, WallDistancePx: 40})
+	if !strings.HasPrefix(walled.Get("center").(string), "Rank 1 RETURN") {
+		t.Errorf("dense but against a wall: %v", walled.Get("center"))
+	}
+	base := `"path":{"choice":"left__medium"},"fire":{"choice":"shoot"},"bomb":{"choice":"hold"}`
+	if got := normalizeDecisionResponse(decode(t, `{"answers":{`+base+`,"position":{"choice":"center"}}}`), false, true)["position"]; got != "center" {
+		t.Errorf("asked position = %v", got)
+	}
+	if got := normalizeDecisionResponse(decode(t, `{"answers":{`+base+`}}`))["position"]; got != "stay" {
+		t.Errorf("unasked position = %v", got)
 	}
 }
 

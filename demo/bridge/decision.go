@@ -25,6 +25,7 @@ var (
 	BombIDs     = []string{"hold", "detonate"}
 	PickupKinds = []string{"bomb", "weapon", "wingman", "missile", "shield"}
 	AssistIDs   = []string{"hold", "call"}
+	PositionIDs = []string{"stay", "center"}
 	PathIDs     = func() []string {
 		ids := make([]string, len(ActionIDs))
 		for i, movement := range ActionIDs {
@@ -63,15 +64,18 @@ const (
 	// without closing in by zoneProgressPx becomes OK, so the ship returns when it safely can.
 	zoneMinX, zoneMaxX = 120.0, 840.0
 	zoneMinY, zoneMaxY = 77.5, 542.5
-	// v2 position (engine v15): no rectangle. When the game sends sampled futures, the only position preference is to
-	// stay off the walls and out of the corners; the middle of the arena is flat. arenaWidth/Height match the engine.
-	arenaWidth, arenaHeight             = 960.0, 620.0
-	edgeSidePx, edgeTopPx, edgeBottomPx = 160.0, 200.0, 60.0
-	zoneProgressPx                      = 10
-	pathInstructions                    = "Pick the move that keeps the ship alive. Each move starts with its tier number: 1 is best, 6 is worst. Always pick a move with the lowest tier number present. Within that tier prefer more escapes, then keeps course, then not near enemy, then open space, then toward center. If every move is tier 6, pick the one hit latest."
-	fireInstructions                    = "Choose shoot if enemy_count>0, otherwise cease. Shoot also launches homing missiles."
-	bombInstructions                    = "Pick the choice with rank 1. Collect floating bomb pickups to refill charges."
-	assistInstructions                  = "Pick the choice with rank 1. The assistance strike sweeps the whole arena from bottom to top."
+	// v15 position is a model decision, not a local rule. When the game sends sampled futures, path tiers are survival
+	// only; the separate "position" question (asked while the ship is away from the centre) decides whether the next
+	// moves head back toward the arena centre, and only that answer reshapes the path tiers (see markCenterBehind).
+	centerNearPx          = 120.0
+	centerProgressMinPx   = 8.0
+	positionAnswerSeconds = 1.5
+	zoneProgressPx        = 10
+	pathInstructions      = "Pick the move that keeps the ship alive. Each move starts with its tier number: 1 is best, 6 is worst. Always pick a move with the lowest tier number present. Within that tier prefer more escapes, then keeps course, then not near enemy, then open space, then toward center. If every move is tier 6, pick the one hit latest."
+	fireInstructions      = "Choose shoot if enemy_count>0, otherwise cease. Shoot also launches homing missiles."
+	bombInstructions      = "Pick the choice with rank 1. Collect floating bomb pickups to refill charges."
+	assistInstructions    = "Pick the choice with rank 1. The assistance strike sweeps the whole arena from bottom to top."
+	positionInstructions  = "Pick the choice with rank 1. Center means the next moves head back toward the middle of the arena."
 	// bombUrgentTier is the best path tier at which the detonate label reports that no safe move exists.
 	bombUrgentTier    = 5
 	intentInstruction = "Classify current intent."
@@ -293,7 +297,8 @@ type PathRow struct {
 	CenterProgress  float64
 	EndX            float64 // v2: where the move leaves the ship (sampled futures), for the station core
 	EndY            float64
-	PositionBehind  bool // v2: a safest move whose end position is clearly worse than the best safest move's
+	PositionBehind  bool // v15: the model chose "center" and this safest move makes clearly less progress toward it
+	CenterMode      bool // v15: the model's last position answer was "center" (labels state centre progress)
 	Crowd           int64
 	MoveCollisionMs *float64
 	EscapeOptions   int64
@@ -409,8 +414,9 @@ func pathTable(value any, player *packedPlayer, currentMovement string) ([]PathR
 					fy = *y
 				}
 			}
-			// No zone in futures mode: no zone or centre words, only the edge preference (markPositionBehind).
-			zoneStart, zoneEnd, centerProgress = 0, 0, 0
+			// No zone in futures mode. Centre progress is kept for the model's position decision (markCenterBehind).
+			zoneStart, zoneEnd = 0, 0
+			centerProgress = math.Hypot(player.x-ArenaCenterX, player.y-ArenaCenterY) - math.Hypot(fx-ArenaCenterX, fy-ArenaCenterY)
 			endXFuture, endYFuture = fx, fy
 		}
 		rows = append(rows, PathRow{
@@ -441,7 +447,6 @@ func pathTable(value any, player *packedPlayer, currentMovement string) ([]PathR
 	for i := range rows {
 		rows[i].PickupWanted = wanted
 	}
-	markPositionBehind(rows)
 	return rows, nil
 }
 
@@ -475,23 +480,10 @@ func futureRow(value any, name string) (*FutureRow, error) {
 	return &FutureRow{Survival: survival, Clear: clear, Futures: futures}, nil
 }
 
-// positionScore is the futures-mode position preference: distance from the side walls, the top (where the enemy
-// formation flies) and the bottom, each saturating, so the middle of the arena is flat and only walls and corners
-// cost. Higher is better.
-func positionScore(x, y float64) float64 {
-	side := math.Min(math.Min(x, arenaWidth-x), edgeSidePx) / edgeSidePx
-	top := math.Min(y, edgeTopPx) / edgeTopPx
-	bottom := math.Min(arenaHeight-y, edgeBottomPx) / edgeBottomPx
-	return side + top + bottom
-}
-
-// positionTolerance: safest moves within this much of the best station score stay in the top tier.
-const positionTolerance = 0.05
-
-// markPositionBehind makes position part of the tier, the one signal Julia follows reliably: among the moves with
-// the highest sampled survival, those whose end position is clearly worse than the best one drop a tier. Within-tier
-// words alone did not hold the station: Julia's word preferences walked the ship to the walls (v2 runs C3, C4).
-func markPositionBehind(rows []PathRow) {
+// markCenterBehind applies the model's own "center" answer: among the moves with the highest sampled survival, those
+// that make clearly less progress toward the centre than the best of them drop a tier. Julia follows the tier, not
+// within-tier words, so this is how its position decision reaches its path decision. Nothing happens on "stay".
+func markCenterBehind(rows []PathRow) {
 	best := -1.0
 	for _, row := range rows {
 		if row.Futures != nil && row.Futures.Survival > best {
@@ -504,18 +496,19 @@ func markPositionBehind(rows []PathRow) {
 	top := math.Inf(-1)
 	for _, row := range rows {
 		if row.Futures.Survival >= best-1e-9 {
-			top = math.Max(top, positionScore(row.EndX, row.EndY))
+			top = math.Max(top, row.CenterProgress)
 		}
 	}
 	for i := range rows {
-		if rows[i].Futures.Survival >= best-1e-9 && positionScore(rows[i].EndX, rows[i].EndY) < top-positionTolerance {
+		rows[i].CenterMode = true
+		if rows[i].Futures.Survival >= best-1e-9 && rows[i].CenterProgress < top-centerProgressMinPx {
 			rows[i].PositionBehind = true
 		}
 	}
 }
 
-// futureTier is the v2 tier: the share of sampled futures a move survives, then the station preference. A safe
-// move that ends near a side wall or outside the station without heading back drops one tier, never below RISKY.
+// futureTier is the v15 tier: the share of sampled futures a move survives. Walls are not judged here: a move that
+// pins the ship already loses in the sampled futures. Only the model's own "center" answer moves a safe move down.
 func futureTier(row PathRow) string {
 	f := row.Futures
 	switch {
@@ -523,8 +516,6 @@ func futureTier(row PathRow) string {
 		return "DEADLY"
 	case f.Survival < 0.6:
 		return "DOOMED"
-	case row.WallRoom < trapWallRoomPx:
-		return "TRAP"
 	}
 	tier := "RISKY"
 	if f.Survival >= 0.999 {
@@ -532,9 +523,7 @@ func futureTier(row PathRow) string {
 	} else if f.Survival >= 0.9 {
 		tier = "OK"
 	}
-	if row.WallRoom < nearWallRoomPx || (row.ZoneEndOut > 0 && !row.zoneReturning()) {
-		tier = shiftTier(tier, 1)
-	} else if row.PositionBehind {
+	if row.PositionBehind {
 		tier = shiftTier(tier, 1)
 	}
 	return tier
@@ -692,25 +681,12 @@ func futureLabel(row PathRow, tier, prefix string) string {
 		return prefix + ": the ship is hit in every sampled future."
 	case "DOOMED":
 		return fmt.Sprintf("%s: %s, mostly hit.", prefix, futuresPhrase(f))
-	case "TRAP":
-		return prefix + ": ends pinned against the wall with no escape room."
 	}
 	parts := []string{futuresPhrase(f)}
-	if row.WallRoom < nearWallRoomPx {
-		parts = append(parts, "near wall")
-	}
 	if row.Motion == "continues" {
 		parts = append(parts, "keeps course")
 	}
-	switch {
-	case row.zoneReturning():
-		parts = append(parts, "back to zone")
-	case row.ZoneEndOut > 0 && row.ZoneStartOut == 0:
-		parts = append(parts, "leaves zone")
-	case row.ZoneEndOut > 0:
-		parts = append(parts, "outside zone")
-	}
-	if row.CenterProgress > centerProgressPx {
+	if row.CenterMode && row.CenterProgress > centerProgressMinPx {
 		parts = append(parts, "toward center")
 	}
 	return fmt.Sprintf("%s: %s.", prefix, strings.Join(parts, ", "))
@@ -718,6 +694,11 @@ func futureLabel(row PathRow, tier, prefix string) string {
 
 // buildPathCriteria returns the path labels and the best (lowest) tier among them.
 func buildPathCriteria(request *DecisionRequest) (*OrderedMap, int, error) {
+	return buildPathCriteriaFor(request, false)
+}
+
+// buildPathCriteriaFor builds the path labels; centerMode applies the model's last "center" answer (sampled futures only).
+func buildPathCriteriaFor(request *DecisionRequest, centerMode bool) (*OrderedMap, int, error) {
 	current, err := activeMovement(request.State["active_command"])
 	if err != nil {
 		return nil, 0, err
@@ -729,6 +710,9 @@ func buildPathCriteria(request *DecisionRequest) (*OrderedMap, int, error) {
 	rows, err := pathTable(request.Forecast["candidates"], player, current)
 	if err != nil {
 		return nil, 0, err
+	}
+	if centerMode && len(rows) > 0 && rows[0].Futures != nil {
+		markCenterBehind(rows)
 	}
 	criteria := NewOrderedMap()
 	best := len(pathTiers)
@@ -848,6 +832,68 @@ func buildAssistCriteria(facts *AssistFacts, bomb BombFacts, bestTier int) *Orde
 	return criteria
 }
 
+// SurroundingsFacts is the validated state.surroundings observation (engine v15): what is around the ship.
+type SurroundingsFacts struct {
+	BulletsNear, EnemiesNear, RadiusPx int64
+	CenterDistancePx, WallDistancePx   float64
+}
+
+func surroundingsFacts(value any) (*SurroundingsFacts, error) {
+	if value == nil {
+		return nil, nil
+	}
+	object, err := requireObject(value, "surroundings")
+	if err != nil {
+		return nil, err
+	}
+	var facts SurroundingsFacts
+	for key, target := range map[string]*int64{"bullets_near": &facts.BulletsNear, "enemies_near": &facts.EnemiesNear, "radius_px": &facts.RadiusPx} {
+		if *target, err = nonnegativeInt(object[key], "surroundings."+key); err != nil {
+			return nil, err
+		}
+	}
+	for key, target := range map[string]*float64{"center_distance_px": &facts.CenterDistancePx, "wall_distance_px": &facts.WallDistancePx} {
+		_, number, err := observedNumber(object, key, "surroundings", false, min0())
+		if err != nil {
+			return nil, err
+		}
+		*target = *number
+	}
+	return &facts, nil
+}
+
+// Surroundings thresholds for the position question's ranks.
+const (
+	denseBulletsNear = 10 // bullets within the radius: dodge where you are first
+	nearWallPx       = 90 // closer than this to a wall: the escape directions halve
+)
+
+// buildPositionCriteria is the separate position decision, asked only while the ship is away from the centre (nil
+// otherwise: stay). The facts are the surrounding density and the distances; RETURN ranks first when the
+// surroundings are calm enough to travel or a wall is close, HOLD when the ship is in a dense field away from walls.
+func buildPositionCriteria(f *SurroundingsFacts) *OrderedMap {
+	if f == nil || f.CenterDistancePx <= centerNearPx {
+		return nil
+	}
+	density := "calm"
+	if f.BulletsNear >= denseBulletsNear {
+		density = "dense"
+	} else if f.BulletsNear >= denseBulletsNear/2 {
+		density = "busy"
+	}
+	facts := fmt.Sprintf("%d px from center; %d bullets and %d enemy ships within %d px (%s); nearest wall %d px",
+		int64(f.CenterDistancePx), f.BulletsNear, f.EnemiesNear, f.RadiusPx, density, int64(f.WallDistancePx))
+	criteria := NewOrderedMap()
+	if density != "dense" || f.WallDistancePx < nearWallPx {
+		criteria.Set("stay", "Rank 2 DRIFT: "+facts+"; staying out here leaves fewer ways to escape.")
+		criteria.Set("center", "Rank 1 RETURN: "+facts+"; the next moves head back toward the middle.")
+		return criteria
+	}
+	criteria.Set("stay", "Rank 1 HOLD: "+facts+"; dodge here first, return when it thins out.")
+	criteria.Set("center", "Rank 2 CROSS: "+facts+"; crossing a dense field to the middle risks a hit.")
+	return criteria
+}
+
 // ContextBudgetExceeded is returned (not raised to HTTP) as a null decision.
 type ContextBudgetExceeded struct{ Message string }
 
@@ -921,7 +967,7 @@ func choiceCriteria(ids []string, descriptions map[string]string) *OrderedMap {
 	return criteria
 }
 
-func buildUpstreamPayload(model, promptText string, packed, pathCriteria, bombCriteria, assistCriteria *OrderedMap, flavor string) *OrderedMap {
+func buildUpstreamPayload(model, promptText string, packed, pathCriteria, bombCriteria, assistCriteria *OrderedMap, flavor string, positionCriteria ...*OrderedMap) *OrderedMap {
 	question := func(instructions string, criteria *OrderedMap) *OrderedMap {
 		return NewOrderedMap().Set("type", "choice").Set("instructions", instructions).Set("criteria", criteria)
 	}
@@ -939,6 +985,13 @@ func buildUpstreamPayload(model, promptText string, packed, pathCriteria, bombCr
 			Set("path", path).
 			Set("fire", question(fireInstructions, choiceCriteria(FireIDs, FireDescriptions))).
 			Set("bomb", bomb))
+	if len(positionCriteria) > 0 && positionCriteria[0] != nil {
+		position := question(positionInstructions, positionCriteria[0])
+		if flavor == "julia" {
+			position.Set("option_questions", bombOptionQuestions())
+		}
+		payload.Get("questions").(*OrderedMap).Set("position", position)
+	}
 	if assistCriteria != nil {
 		assist := question(assistInstructions, assistCriteria)
 		if flavor == "julia" {
@@ -1038,7 +1091,7 @@ func nullConfidence() map[string]any {
 
 // normalizeDecisionResponse validates the path, fire, and bomb answers atomically. Intent is no
 // longer asked (it never steered the game and cost latency); a stray intent answer must still be valid.
-func normalizeDecisionResponse(response any, assistAsked ...bool) map[string]any {
+func normalizeDecisionResponse(response any, asked ...bool) map[string]any {
 	intent := extractAnswer(response, "intent", IntentIDs)
 	if intent.err == "missing_intent" {
 		intent = answer{}
@@ -1048,18 +1101,23 @@ func normalizeDecisionResponse(response any, assistAsked ...bool) map[string]any
 	bomb := extractAnswer(response, "bomb", BombIDs)
 	// The assist question is only asked when triggered; otherwise the strike holds.
 	assist := answer{choice: "hold"}
-	if len(assistAsked) > 0 && assistAsked[0] {
+	if len(asked) > 0 && asked[0] {
 		assist = extractAnswer(response, "assist", AssistIDs)
 	}
+	// The position question is only asked away from the centre; unasked, the ship stays on its own course.
+	position := answer{choice: "stay"}
+	if len(asked) > 1 && asked[1] {
+		position = extractAnswer(response, "position", PositionIDs)
+	}
 	var errors []string
-	for _, item := range []answer{intent, path, fire, bomb, assist} {
+	for _, item := range []answer{intent, path, fire, bomb, assist, position} {
 		if item.err != "" {
 			errors = append(errors, item.err)
 		}
 	}
 	if len(errors) > 0 {
 		return map[string]any{
-			"intent": nil, "movement": nil, "fire": nil, "lease": nil, "bomb": nil, "assist": nil, "valid_choice": false,
+			"intent": nil, "movement": nil, "fire": nil, "lease": nil, "bomb": nil, "assist": nil, "position": nil, "valid_choice": false,
 			"confidence": nullConfidence(), "error": strings.Join(errors, ","),
 		}
 	}
@@ -1071,6 +1129,7 @@ func normalizeDecisionResponse(response any, assistAsked ...bool) map[string]any
 		"lease":        path.choice[separator+2:],
 		"bomb":         bomb.choice,
 		"assist":       assist.choice,
+		"position":     position.choice,
 		"valid_choice": true,
 		"confidence": map[string]any{
 			"intent": intent.confidence, "path": path.confidence, "movement": path.confidence,

@@ -110,6 +110,7 @@
     button:hover { background:var(--w); }
     button:active { box-shadow:inset 2px 2px 0 rgba(0,0,0,.4), 0 0 0 2px var(--k); }
     button:focus-visible { outline:2px solid var(--y); outline-offset:2px; }
+    .threat-percent { color:var(--y); margin-left:6px; font-size:inherit; }
     #auto-ramp-button { margin-left:auto; background:var(--k); color:var(--m); min-height:0; padding:3px 5px; font-size:7px; flex:none; box-shadow:none; }
     #auto-ramp-button[aria-pressed="false"] { color:var(--g); }
     #autopilot-button { background:var(--l); } #pause-button { background:var(--y); } #restart-button { background:var(--r); color:var(--w); }
@@ -385,7 +386,7 @@
           </div>
         </div>
         <div class="section threat" id="decision-panel">
-          <h2>Threat level <button type="button" id="auto-ramp-button" aria-pressed="true" title="In autopilot, raise all threat sliders a little every 20 s of mission time (about 8 minutes to max)">Auto ramp: ON</button></h2>
+          <h2>Threat level <b id="threat-percent" class="threat-percent">0%</b> <button type="button" id="auto-ramp-button" aria-pressed="true" title="In autopilot, raise all threat sliders a little every 20 s of mission time (about 8 minutes to max)">Auto ramp: ON</button></h2>
           <div class="tuning-grid">
             <label class="slider-row"><span>Bullet density</span><input id="bullet-density" type="range" min="1" max="16" step="0.25" value="1" /><b id="bullet-density-value">1.00x</b></label>
             <label class="slider-row"><span>Enemy density</span><input id="enemy-density" type="range" min="1" max="12" step="0.25" value="1" /><b id="enemy-density-value">1.00x</b></label>
@@ -589,6 +590,8 @@
     // v15 armor: one shot no longer erases a projectile. Gun, escort and splash hits take one point; a homing missile
     // takes MISSILE.damage. Bombs and the assistance strike still clear everything they reach.
     const ARMOR = Object.freeze({ bullet:2, boss_bullet:2, missile:3 });
+    // v15: the radius the position decision reads the surrounding density in.
+    const SURROUNDINGS_RADIUS_PX = 150;
     // Clearing every fifth wave (so waves 6, 11, 16, ... start with it) grants one extra life, up to EXTRA_LIFE.max_lives.
     const EXTRA_LIFE = Object.freeze({ every_waves:5, max_lives:5 });
     // v15 shields: a rare pickup; each shield absorbs one hit (no life or escort jet lost), up to max stacked.
@@ -825,7 +828,7 @@
           invulnerabilityContacts: 0,
           enemiesDestroyed: 0,
           wavesStarted: 0,
-          safetyOverrides: 0,
+          safetyOverrides: 0, // v15: always 0, kept for trace compatibility (the local override is gone)
           missileLaunches: 0,
           missileHits: 0,
           missileKills: 0,
@@ -1493,6 +1496,17 @@
         } : null,
         mission: game.mission ? { text:game.mission.text, progress:game.mission.progress, target:game.mission.target, status:game.mission.status } : null,
         stage_remaining_s: rounded(Math.max(0, STAGE.duration_s - game.waveClock_s)),
+        // v15: what is around the ship, for the model's separate position decision (stay, or head back to the centre).
+        surroundings: (() => {
+          const near = (thing) => Math.hypot(thing.x - game.player.x, thing.y - game.player.y) <= SURROUNDINGS_RADIUS_PX;
+          return {
+            radius_px: SURROUNDINGS_RADIUS_PX,
+            bullets_near: game.enemyBullets.filter(near).length + (game.bossBombs || []).filter(near).length + game.enemyMissiles.filter(near).length,
+            enemies_near: game.enemies.filter(near).length,
+            center_distance_px: rounded(Math.hypot(game.player.x - WIDTH / 2, game.player.y - HEIGHT / 2)),
+            wall_distance_px: rounded(Math.min(game.player.x, WIDTH - game.player.x, game.player.y, HEIGHT - game.player.y)),
+          };
+        })(),
         weapon_level: game.weaponLevel,
         wingmen: game.wingmen,
         pickups: game.pickups.map((pickup) => ({ kind:pickup.kind, x:rounded(pickup.x), y:rounded(pickup.y) })),
@@ -2810,6 +2824,13 @@
     let lastExecuted = "neutral · hold · cease";
     let nextRequestAllowedWallMs = 0;
     let difficulty = core.normalizeDifficulty({});
+    const THREAT_SLIDERS = Object.freeze({
+      // v15: the full slider ranges, so the threat level and the auto-ramp both read 100% at the doubled ceiling.
+      bulletDensity:{ min:1, max:16, step:.25 },
+      enemyDensity:{ min:1, max:12, step:.25 },
+      fastBulletRatio:{ min:0, max:1, step:.05 },
+      fastBulletSpeed:{ min:1.1, max:9.6, step:.1 },
+    });
     const isFileProtocol = location.protocol === "file:";
     // v2 sampled futures (docs/v2). The K futures of each decision are computed in parallel Web Workers, one per
     // future, so the 60 Hz loop never waits for them; ?futures=0 turns them off, ?futures=2 samples fewer.
@@ -2910,7 +2931,7 @@
       $("exchange-response").textContent = "";
       if (!dialog.open) dialog.showModal();
       try {
-        const reply = await fetch(`/api/exchange?run_id=${encodeURIComponent(runId)}&sequence=${sequence}`, { cache:"no-store" });
+        const reply = await fetch(`api/exchange?run_id=${encodeURIComponent(runId)}&sequence=${sequence}`, { cache:"no-store" });
         const data = await reply.json();
         if (!reply.ok) throw new Error(data.error || `HTTP ${reply.status}`);
         const x = data.exchange;
@@ -3020,10 +3041,26 @@
       $("enemy-density").value = difficulty.enemyDensity;
       $("fast-bullet-ratio").value = difficulty.fastBulletRatio;
       $("fast-bullet-speed").value = difficulty.fastBulletSpeed;
-      $("bullet-density-value").textContent = difficulty.bulletDensity.toFixed(2) + "x";
-      $("enemy-density-value").textContent = difficulty.enemyDensity.toFixed(2) + "x";
-      $("fast-bullet-ratio-value").textContent = Math.round(difficulty.fastBulletRatio * 100) + "%";
-      $("fast-bullet-speed-value").textContent = difficulty.fastBulletSpeed.toFixed(2) + "x";
+      // v15: every slider reads as a percentage of its own range (100% = the doubled ceiling), raw value beside it.
+      const pct = (key) => `${Math.round(sliderFraction(key, difficulty[key]) * 100)}%`;
+      $("bullet-density-value").textContent = `${pct("bulletDensity")} · ${difficulty.bulletDensity.toFixed(1)}x`;
+      $("enemy-density-value").textContent = `${pct("enemyDensity")} · ${difficulty.enemyDensity.toFixed(1)}x`;
+      $("fast-bullet-ratio-value").textContent = `${pct("fastBulletRatio")}`;
+      $("fast-bullet-speed-value").textContent = `${pct("fastBulletSpeed")} · ${difficulty.fastBulletSpeed.toFixed(1)}x`;
+      $("threat-percent").textContent = `${threatPercent(difficulty)}%`;
+    }
+
+    // Fraction of a slider's range (0 at its minimum, 1 at its maximum).
+    function sliderFraction(key, value) {
+      const range = THREAT_SLIDERS[key];
+      return Math.max(0, Math.min(1, (value - range.min) / (range.max - range.min)));
+    }
+
+    // The overall threat level: the mean of the four sliders' fractions, 0-100%. 100% is every slider at its maximum.
+    function threatPercent(settings) {
+      const d = core.normalizeDifficulty(settings);
+      const keys = Object.keys(THREAT_SLIDERS);
+      return Math.round(keys.reduce((sum, key) => sum + sliderFraction(key, d[key]), 0) / keys.length * 100);
     }
 
     function readDifficultyControls(event) {
@@ -3062,12 +3099,6 @@
     // where it already is. It goes through the same live path as a slider release: the slider UI, game.difficulty, and a
     // difficulty_changed event (source auto_ramp) plus a checkpoint in the trace, so replays stay deterministic.
     const AUTO_RAMP = Object.freeze({ every_waves:10, step:.1 });
-    const THREAT_SLIDERS = Object.freeze({
-      bulletDensity:{ min:1, max:8, step:.25 },  // the ramp tops out at the old 4/4; v2 sliders go to 2x by hand
-      enemyDensity:{ min:1, max:6, step:.25 },
-      fastBulletRatio:{ min:0, max:1, step:.05 },
-      fastBulletSpeed:{ min:1.1, max:4.8, step:.1 },
-    });
     let autoRamp = true;
     let rampLevel = 0;
     let rampWave = null; // wave the current 10-wave ramp window started at (null until the run's first tick)
@@ -3550,8 +3581,8 @@
       const stepped = core.stepPolicyTick(game, resolved.command);
       const effectiveCommand = stepped.effective_command;
       if (effectiveCommand) {
-        const source = effectiveCommand.source === "local_safety" ? "local safety" : "djev";
-        lastExecuted = `${source} · ${effectiveCommand.movement} · ${effectiveCommand.fire} · ${effectiveCommand.lease || "emergency"} · ${modelIntentText(effectiveCommand)} · ${(effectiveCommand.end_tick - game.tick).toFixed(0)} ticks`;
+        // v15: every executed command is the model's (no local override exists).
+        lastExecuted = `djev · ${effectiveCommand.movement} · ${effectiveCommand.fire} · ${effectiveCommand.lease || "emergency"} · ${modelIntentText(effectiveCommand)} · ${(effectiveCommand.end_tick - game.tick).toFixed(0)} ticks`;
       } else {
         lastExecuted = `neutral · hold · cease · ${controller.lastNeutralReason}`;
       }
@@ -3747,7 +3778,16 @@
         return `<div class="ord-cell${rank1 ? " rank1" : ""}${lastApi.bomb === choice ? " chosen" : ""}" title="${escapeHtml(text)}"><b>BOMB · ${choice}</b>${escapeHtml(text.replace(/^Rank \d:? ?/, ""))}</div>`;
       });
       const fire = lastApi.fire ? `<div class="ord-cell chosen" style="grid-column:1 / -1;min-height:0"><b>FIRE · ${lastApi.fire}</b>gun ${core.WEAPON.spread_by_level[game.weaponLevel]}-way · missiles · ${game.wingmen} escort jets</div>` : "";
-      $("ordnance").innerHTML = cells.join("") + fire;
+      // v15 triggered questions: position (away from the centre) and the assistance strike (wild field).
+      const extra = [["position", ["stay", "center"]], ["assist", ["hold", "call"]]].flatMap(([name, choices]) => {
+        const labels = lastApi.labels && lastApi.labels[name];
+        if (!labels) return [];
+        return choices.map((choice) => {
+          const text = labels[choice] || "—";
+          return `<div class="ord-cell${/^Rank 1/.test(text) ? " rank1" : ""}${lastApi[name] === choice ? " chosen" : ""}" title="${escapeHtml(text)}"><b>${name.toUpperCase()} · ${choice}</b>${escapeHtml(text.replace(/^Rank \d:? ?/, ""))}</div>`;
+        });
+      });
+      $("ordnance").innerHTML = cells.join("") + extra.join("") + fire;
     }
 
     // ---- Retro renderer (visual only: nothing below feeds back into the simulation) ----
@@ -4077,7 +4117,7 @@
       const life = state.player.lives >= core.EXTRA_LIFE.max_lives ? "LIVES MAX" : `EXTRA LIFE IN ${n} WAVE${n === 1 ? "" : "S"}`;
       const mission = state.mission ? [`MISSION: ${state.mission.text.toUpperCase()}`] : [];
       const strike = state.assist && state.assist.charges > 0 ? ["ASSIST STRIKE READY"] : [];
-      return [`SECTOR ${String(state.wave).padStart(2, "0")}`, ...mission, `STAGE ${core.STAGE.duration_s / 60}:00`, `HOSTILES ${hostiles}`, `THREAT ${threatMultiplier(state.difficulty).toFixed(1)}x`, life, ...strike];
+      return [`SECTOR ${String(state.wave).padStart(2, "0")}`, ...mission, `STAGE ${core.STAGE.duration_s / 60}:00`, `HOSTILES ${hostiles}`, `THREAT ${threatPercent(state.difficulty)}%`, life, ...strike];
     }
 
     // Greedy wrap of " // "-joined segments into terminal lines, each with a "> " prompt.

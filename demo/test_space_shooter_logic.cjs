@@ -401,11 +401,11 @@ test('demo auto-ramp raises every threat slider through the live difficulty path
   assert.equal(game.difficulty.bulletDensity, 1, 'nothing before 10 waves');
   toWave(start + 10);
   assert.equal(adapter.getState().rampLevel, 0.1);
-  // 10% of 1..8 is 1.7, snapped to the 0.25 slider step; the fast speed stays at its higher default.
-  assert.equal(game.difficulty.bulletDensity, 1.75);
-  assert.equal(game.difficulty.fastBulletSpeed, 1.6, 'never lowered below where the slider was');
-  assert.equal(element('bullet-density').value, 1.75, 'the slider UI follows');
-  assert.equal(element('bullet-density-value').textContent, '1.75x');
+  // v15: 10% of 1..16 is 2.5 (the ramp spans the full doubled ranges); the fast speed stays at its higher default.
+  assert.equal(game.difficulty.bulletDensity, 2.5);
+  assert.equal(game.difficulty.fastBulletSpeed, 2, '10% of 1.1..9.6, above the 1.6 default');
+  assert.equal(element('bullet-density').value, 2.5, 'the slider UI follows');
+  assert.equal(element('bullet-density-value').textContent, '10% · 2.5x', 'percent of the range, raw value beside it');
   assert.ok(adapter.getState().history.some((row) => row.kind === 'threat' && /^THREAT UP/.test(row.text)));
   assert.equal(adapter.getState().qualification.valid, false, 'a ramped run is not benchmark-qualified');
   await adapter.drainTrace();
@@ -425,24 +425,24 @@ test('demo auto-ramp raises every threat slider through the live difficulty path
   assert.equal(game.difficulty.bulletDensity, 6);
   toWave(start + 20);
   assert.equal(game.difficulty.bulletDensity, 6, 'the user setting is kept');
-  assert.equal(game.difficulty.enemyDensity, 1.5, 'the others ramp from their values (the ramp restarts from the lowest slider)');
+  assert.equal(game.difficulty.enemyDensity, 2, 'the others ramp from their values (the ramp restarts from the lowest slider)');
 
   // Manual flight pauses the ramp; turning it off stops it.
   adapter.setAutopilot(false);
   toWave(start + 40);
-  assert.equal(game.difficulty.enemyDensity, 1.5, 'paused in manual mode');
+  assert.equal(game.difficulty.enemyDensity, 2, 'paused in manual mode');
   adapter.setAutopilot(true);
   toWave(start + 45);
-  assert.equal(game.difficulty.enemyDensity, 1.5, 'manual waves do not count toward the window');
+  assert.equal(game.difficulty.enemyDensity, 2, 'manual waves do not count toward the window');
   adapter.setAutoRamp(false);
   toWave(start + 80);
-  assert.equal(game.difficulty.enemyDensity, 1.5, 'off');
+  assert.equal(game.difficulty.enemyDensity, 2, 'off');
   adapter.setAutoRamp(true);
 
   // From zero, 10 steps (about 100 waves) reach the top of every range.
   for (let i = 0; i < 30; i += 1) adapter.applyAutoRampStep();
   assert.equal(adapter.getState().rampLevel, 1);
-  assert.deepEqual(plain(game.difficulty), { bulletDensity: 8, enemyDensity: 6, fastBulletRatio: 1, fastBulletSpeed: 4.8 });
+  assert.deepEqual(plain(game.difficulty), { bulletDensity: 16, enemyDensity: 12, fastBulletRatio: 1, fastBulletSpeed: 9.6 });
   assert.equal(adapter.AUTO_RAMP.every_waves / adapter.AUTO_RAMP.step, 100);
   await adapter.endRun('aborted');
 });
@@ -454,7 +454,7 @@ test('the wave briefing uses real values and wraps into prompt lines', () => {
   game.wave = 5;
   // v15: the stage's mission, its 3-minute clock, and the strike when it is available.
   const mission = `MISSION: ${game.mission.text.toUpperCase()}`;
-  assert.deepEqual([...adapter.waveBriefing(game, 14)], ['SECTOR 05', mission, 'STAGE 3:00', 'HOSTILES 14', 'THREAT 2.1x', 'EXTRA LIFE IN 1 WAVE', 'ASSIST STRIKE READY']);
+  assert.deepEqual([...adapter.waveBriefing(game, 14)], ['SECTOR 05', mission, 'STAGE 3:00', 'HOSTILES 14', 'THREAT 5%', 'EXTRA LIFE IN 1 WAVE', 'ASSIST STRIKE READY']);
   game.wave = 1;
   assert.equal(adapter.waveBriefing(game, 7)[5], 'EXTRA LIFE IN 5 WAVES');
   game.wave = 6;

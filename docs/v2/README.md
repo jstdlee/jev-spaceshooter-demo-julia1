@@ -130,3 +130,23 @@ Live at `/v2/` on the julia1 bridge (`bin/bridge --mount /v2=<v2 demo dir>`); ju
   - Bombs and the assistance strike still clear everything at once.
   - Intact bullet shells show a grey outline, and missiles show armor pips.
 - **Escorts:** at most 4, evenly spaced (left, right, above, below), circling the ship and firing outward.
+
+### Position is a model decision (no local position rules)
+- **Path tiers are pure sampled survival.** The bridge no longer applies any wall, TRAP, near-wall or edge rule of its
+  own. A move that pins the ship already loses in the sampled futures.
+- **A separate `position` question** (stay / center) is asked while the ship is more than 120 px from the arena centre.
+  The game reports the surroundings:
+  - bullets, missiles and big bombs within 150 px;
+  - enemy ships within 150 px;
+  - distance from the centre;
+  - nearest wall.
+
+  The question ranks the options:
+  - **RETURN** when the surroundings are calm or busy, or a wall is within 90 px;
+  - **HOLD** in a dense field (10+ nearby) away from walls.
+- **The answer carries over.** A `center` answer holds for 1.5 s. During that time, the safest moves that make clearly
+  less progress toward the centre drop one tier, and their labels say "toward center". On `stay`, or when the
+  question was not asked, position does not touch the path decision.
+- **Threat level reads 0–100%.** Each slider shows its percentage of its range, and the overall level is their mean.
+  100% means every slider is at the doubled ceiling, and the auto-ramp also climbs to 100%.
+- **The event-log detail now works under `/v2/`.** It calls `api/exchange` relative to the page.
