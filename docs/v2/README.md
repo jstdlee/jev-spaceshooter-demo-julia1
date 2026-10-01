@@ -50,7 +50,7 @@ When the game sends `futures`, the bridge sets the tier from sampled survival, a
 A safe move drops one tier in these cases (never below RISKY):
 - it ends near a wall;
 - it leaves the station without heading back;
-- it stays in the station's outer part without heading toward the centre.
+- it is one of the safest moves but ends in a clearly worse place (station score more than 0.05 below the best of them).
 
 A perfect reader of these labels: **8/8, 0 hits**. The labels carry the strategy.
 
@@ -61,14 +61,21 @@ A perfect reader of these labels: **8/8, 0 hits**. The labels carry the strategy
 | C1 | "survives 3/4 futures" | 91.1% | 3/4 (seeds 1–4) |
 | C2 | offline replay of 800 logged states: "hit in 1 of 4 futures" | 90.8% → **98.6%** | — |
 | C3 | hit-count wording | 94.3% | 3/8: momentum drift |
-| C4 | + station core (position before momentum) | see results.tsv | see results.tsv |
+| C4 | + station core rule (position before momentum, words only) | 93.9% | 3/8: drifts left and up instead |
+| **C5** | **position in the tier: among the safest moves, a clearly worse end position drops a tier** | **94.8%** | **6/8, mean 53.6 s** |
+| C6 | C5 with a linear pull to the centre | 87.5% | 4/8 (reverted) |
+
+**Final: C5.** Julia survives 6 of 8 seeds at 2× (mean 53.6 s). A perfect reader of the same labels survives 8/8 with
+0 hits, so the remaining gap is the model lane: on seed 7 Julia still slides along the station's flat middle by
+"keeps course" until the way back is DOOMED.
 
 What was learnt about Julia:
 - Its outcome judgement reads the word *hit*, not a fraction.
 - Dropping "keeps course" made it worse offline (74.9%).
 - Best-tier picks alone aren't enough. In C3 every pick on seed 6 was best-tier, yet "keeps course" walked the
-  ship along the station band, out of it, and against the wall. The fix was in the labels, not the model: moving
-  outward inside the station is no longer GOOD.
+  ship along the station band, out of it, and against the wall.
+- Julia follows the tier, not within-tier words. The position strategy works only when it is part of the tier (C5).
+  Expressing it in words (C4) or pulling too hard (C6) did not work.
 
 ## Tools
 - `demo/v2_lab.cjs`: in-process lockstep with pluggable policies (`forecast`, `rollout`, `mc`, `futures`) and a death autopsy.
