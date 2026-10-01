@@ -90,3 +90,27 @@ What was learnt about Julia:
 - **Constant questions.** Fire is always `shoot`, and the bomb question is still asked when nothing can detonate.
   Both are asked every decision (the budget aspect).
 - `test_strategy_regression.cjs` has one failing test inherited from `julia1`.
+
+## Engine v15 (game features, after the strategy study)
+
+Live at `/v2/` on the julia1 bridge (`bin/bridge --mount /v2=<v2 demo dir>`); julia1 stays at `/`.
+
+- **Sampled futures in the browser:** each decision's K futures run in K Web Workers, so the 60 Hz loop never waits.
+  `?futures=2` samples fewer, and `?futures=0` turns them off.
+- **Shields:** a rare pickup (first at 28 s, then every 42 s). Each shield absorbs one hit, and they stack to 4, drawn
+  as shimmering rings: cyan, green, magenta, gold.
+- **Assistance strike:** one per 10-wave block. A sweep rises from the bottom of the arena to the top and destroys
+  everything, the boss included. It is a new **triggered decision**: the bridge asks it only when ≥ 60 bullets are on
+  screen. It ranks CALL NOW only when every move is tier 5+ and the bomb cannot help (no charge or jet left, or ≥ 90
+  bullets). Otherwise the strike holds without a model call.
+- **Boss:** denser rings (22 every 1.7 s) and fans (11 every 1.3 s), plus big bombs. A big bomb takes 3 hits to shoot
+  down and bursts into a 16-bullet ring at its fuse or at the ship's height.
+- **Stages:** every wave lasts 3 minutes. A cleared formation brings reinforcements; at the end, ships still on screen
+  withdraw and the boss stays.
+- **Missions:** one random mission per stage (destroy N, collect 3, lose no life, destroy the boss, intercept 60, no
+  bombs). Completing one pays 1500 points and a bomb charge.
+- **Position:** no rectangle. Only walls and corners cost a tier among the safest moves. This differs from the measured
+  C5 station strategy and has not been re-evaluated.
+- **Art:** Dart, Wasp and Crab variants of the enemy classes; Mantis and Hydra bosses next to the Dreadnought.
+- **Ranking board:** after a death, enter a name. Runs rank by time survived, then score, stored per demo in
+  `runs/leaderboard.json` (`GET/POST api/leaderboard`, one entry per finished run).
