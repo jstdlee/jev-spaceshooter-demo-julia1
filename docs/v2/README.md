@@ -114,3 +114,19 @@ Live at `/v2/` on the julia1 bridge (`bin/bridge --mount /v2=<v2 demo dir>`); ju
 - **Art:** Dart, Wasp and Crab variants of the enemy classes; Mantis and Hydra bosses next to the Dreadnought.
 - **Ranking board:** after a death, enter a name. Runs rank by time survived, then score, stored per demo in
   `runs/leaderboard.json` (`GET/POST api/leaderboard`, one entry per finished run).
+
+### Engine v15 rules on fairness and armor
+- **No local dodge.** The `hybrid` local safety override is gone: the model's move is always the move executed. The
+  engine refuses a manifest asking for it, and `benchmark.cjs --policy-mode` accepts only `djev-only`.
+- **The forecast sees only what a player can see.** Each sampled future resamples the RNG and the hidden timers: the
+  formation's next shot is drawn at random, a boss that has not appeared stays absent, and pickups are switched off.
+  The lab's `rollout` policy, which knows the real future, exists only as a ceiling in `demo/v2_lab.cjs` and is never
+  used by the game or the bridge.
+- **What remains, all visible on screen:** the 1.1 s blink after a hit, the 0.6 s blink after a shield absorbs one,
+  and shields themselves, which are pickups.
+- **Armor:**
+  - Enemy bullets take 2 hits (gun or escort shot, or splash).
+  - Enemy missiles take 3 hits; a homing missile counts as 1.
+  - Bombs and the assistance strike still clear everything at once.
+  - Intact bullet shells show a grey outline, and missiles show armor pips.
+- **Escorts:** at most 4, evenly spaced (left, right, above, below), circling the ship and firing outward.

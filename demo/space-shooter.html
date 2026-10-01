@@ -426,10 +426,11 @@
       <div class="legend">
         <div><canvas class="legend-sprite" data-sprite="weapon" data-tint="Y" width="36" height="36"></canvas><span><b>W weapon</b> upgrades: spread → rapid → splash → 8-missile swarm</span></div>
         <div><canvas class="legend-sprite" data-sprite="bomb" data-tint="O" width="36" height="36"></canvas><span><b>B bomb</b> charge: clears bullets and ships nearby</span></div>
-        <div><canvas class="legend-sprite" data-sprite="wingman_pickup" data-tint="W" width="36" height="36"></canvas><span><b>F escort jet</b>: orbits the ship and fires outward from its ring</span></div>
+        <div><canvas class="legend-sprite" data-sprite="wingman_pickup" data-tint="W" width="36" height="36"></canvas><span><b>F escort jet</b> (4 max): circles the ship, firing outward as it orbits</span></div>
         <div><canvas class="legend-sprite" data-sprite="missile_pickup" data-tint="M" width="36" height="36"></canvas><span><b>M missile pod</b>: +1 homing missile in flight (8 max)</span></div>
         <div><span class="magnet-icon" aria-hidden="true">(·)</span><span><b>Magnet</b> pulls nearby pickups in; no need to touch them</span></div>
         <div><canvas class="legend-sprite" data-sprite="shield_pickup" data-tint="C" width="36" height="36"></canvas><span><b>Shield</b> (rare): absorbs one hit, stacks to 4 (cyan · green · magenta · gold)</span></div>
+        <div><span class="magnet-icon" aria-hidden="true">[o]</span><span><b>Armored shots</b>: enemy bullets take 2 hits and missiles 3 to destroy; bombs and the strike still clear them</span></div>
       </div>
       <p class="intro-text" style="font-size:18px;margin-top:10px">Each wave is a 3-minute stage with a random mission (bonus score and a bomb). One <b>assistance strike</b> per 10 waves sweeps the whole field from bottom to top; the model calls it when the bullet field goes wild. Every 5th wave adds a life (5 max).</p>
       <div class="intro-h guide-h">Manual controls</div>
@@ -569,13 +570,14 @@
       // Pickups appear at a seeded random spot near the ship: spawn_near_px from it, then kept inside the drift band.
       spawn_near_px:{ min:140, max:260 } });
     const PICKUP_KINDS = Object.freeze(Object.keys(PICKUP.spawn_interval_s));
-    // Up to eight little escort jets ring the ship, each facing its own direction (degrees, 0 = right, 90 = down).
+    // Up to four little escort jets ring the ship, each facing its own direction (degrees, 0 = right, 90 = down).
     // Their shots destroy enemies and also enemy bullets and missiles; the first two add a missile to each salvo.
     // The ring orbits the ship at orbit_rad_s. Escorts fire (only while the fire answer is shoot) on their own clock
     // every fire_interval_s (halved by rapid fire from WEAPON.rapid_from_level). Each shot flies straight along its
     // jet's outward facing on the orbiting ring; escorts do not aim.
     // With no bombs left, a detonate decision sacrifices one jet for the same blast.
-    const WINGMAN = Object.freeze({ max:8, radius:40, slot_angles_deg:[180, 0, 225, 315, 135, 45, 270, 90], shot_speed:520, missile_slots:2, orbit_rad_s:1.6,
+    // v15: at most four escorts, evenly spaced (left, right, above, below) on the orbit, firing outward as they circle.
+    const WINGMAN = Object.freeze({ max:4, radius:40, slot_angles_deg:[180, 0, 270, 90], shot_speed:520, missile_slots:2, orbit_rad_s:1.6,
       fire_interval_s:.17 });
     // A boss appears at random times, parks near the top, and saturates the arena with bullet rings, aimed fans, and homing missiles.
     // v15: denser rings and fans, plus big bombs: slow, large shells that can be shot down (hp) and burst into a ring of
@@ -584,6 +586,9 @@
       ring:{ count:22, interval_s:1.7, speed:150 }, fan:{ count:11, spread_rad:1.2, interval_s:1.3, speed:190 }, missiles:{ count:2, interval_s:4.5 },
       big_bomb:{ interval_s:3.2, speed:120, box:26, hp:3, fuse_s:1.6, burst:16, burst_speed:170, score:40 } });
     const ENEMY_MISSILE = Object.freeze({ speed:190, turn_rate:1.4, lifetime_s:5, box:{ w:10, h:10 } });
+    // v15 armor: one shot no longer erases a projectile. Gun, escort and splash hits take one point; a homing missile
+    // takes MISSILE.damage. Bombs and the assistance strike still clear everything they reach.
+    const ARMOR = Object.freeze({ bullet:2, boss_bullet:2, missile:3 });
     // Clearing every fifth wave (so waves 6, 11, 16, ... start with it) grants one extra life, up to EXTRA_LIFE.max_lives.
     const EXTRA_LIFE = Object.freeze({ every_waves:5, max_lives:5 });
     // v15 shields: a rare pickup; each shield absorbs one hit (no life or escort jet lost), up to max stacked.
@@ -773,7 +778,10 @@
         tick: 0,
         sim_ms: 0,
         seed,
-        policy_mode: manifest.policy_mode === "hybrid" ? "hybrid" : "djev-only",
+        policy_mode: (() => {
+          if (manifest.policy_mode === "hybrid") throw new Error("engine v15 has no local safety override: policy_mode must be djev-only");
+          return "djev-only";
+        })(),
         rng: { algorithm: PRNG_VERSION, state: seed },
         difficulty: normalizeDifficulty(manifest.difficulty || (manifest.profile === "hardest" ? HARDEST_DIFFICULTY : DEFAULT_DIFFICULTY)),
         wave: 1,
@@ -1347,6 +1355,12 @@
       };
       const start = restoreGame(serializeGame(game));
       start.rng.state = sampledRngState(game.tick, sample);
+      // Fairness: a clone knows only what the player can see. The RNG is resampled (enemy aim, spray, fast shots), and
+      // the hidden timers are too: when the formation fires next is drawn from the sampled RNG, and a boss that has not
+      // appeared does not appear in the forecast; pickup spawns cannot hurt and are switched off.
+      start.enemyFireClock_s = random01(start) * fireIntervalForDifficulty(start.difficulty);
+      if (start.boss.active_id === null) start.boss.clock_s = Infinity;
+      for (const kind of Object.keys(start.pickupClock_s || {})) start.pickupClock_s[kind] = Infinity;
       if (play(start, prefix_movement, prefix_ticks) < prefix_ticks) return null;
       const afterPrefix = serializeGame(start);
       const out = {};
@@ -1695,6 +1709,7 @@
           radius: extra.radius ?? (tuned.fast ? 5 : 4),
           fast: tuned.fast,
           from_enemy_id: enemy.id,
+          hp: ARMOR.bullet,
         };
         game.enemyBullets.push(projectile);
         game.counters.enemyShots += 1;
@@ -1744,8 +1759,10 @@
     function explodeShell(game, shot, hitEnemyId, events) {
       const center = { x:shot.x, y:shot.y };
       const inside = (thing) => Math.hypot(thing.x - center.x, thing.y - center.y) <= WEAPON.splash_radius_px;
-      const clearedBullets = game.enemyBullets.filter(inside).map((bullet) => bullet.id);
-      if (clearedBullets.length) game.enemyBullets = game.enemyBullets.filter((bullet) => !inside(bullet));
+      // v15: the burst wears one point off every bullet's armor in the radius; only bullets it breaks are cleared.
+      for (const bullet of game.enemyBullets) if (inside(bullet)) bullet.hp = (bullet.hp ?? 1) - 1;
+      const clearedBullets = game.enemyBullets.filter((bullet) => inside(bullet) && bullet.hp <= 0).map((bullet) => bullet.id);
+      if (clearedBullets.length) game.enemyBullets = game.enemyBullets.filter((bullet) => !(inside(bullet) && bullet.hp <= 0));
       // Ships count from the nearest point of their hull box, so large ships (tanks, the boss) are not missed.
       const hullInside = (enemy) => Math.hypot(Math.max(0, Math.abs(enemy.x - center.x) - enemy.w / 2), Math.max(0, Math.abs(enemy.y - center.y) - enemy.h / 2)) <= WEAPON.splash_radius_px;
       const damaged = game.enemies.filter((enemy) => enemy.id !== hitEnemyId && hullInside(enemy)).map((enemy) => enemy.id);
@@ -1894,15 +1911,20 @@
       for (let i = game.playerMissiles.length - 1; i >= 0; i -= 1) {
         const missile = game.playerMissiles[i];
         const box = { x:missile.x, y:missile.y, w:MISSILE.box.w, h:MISSILE.box.h };
-        // A homing missile that touches an enemy missile destroys both.
+        // A homing missile that touches an enemy missile is spent and deals MISSILE.damage to its armor (v15);
+        // the enemy missile breaks when its armor is gone.
         const hostileIndex = game.enemyMissiles.findIndex((m) => overlaps(box, { x:m.x, y:m.y, w:ENEMY_MISSILE.box.w, h:ENEMY_MISSILE.box.h }));
         if (hostileIndex >= 0) {
           const hostile = game.enemyMissiles[hostileIndex];
           game.playerMissiles.splice(i, 1);
-          game.enemyMissiles.splice(hostileIndex, 1);
-          game.counters.enemyMissilesDestroyed += 1;
-          game.counters.missileIntercepts += 1;
-          events.push({ type:"missile_intercept", tick:game.tick, missile_id:missile.id, target_id:hostile.id, x:hostile.x, y:hostile.y, decision_id:missile.decision_id });
+          hostile.hp = (hostile.hp ?? 1) - MISSILE.damage;
+          const destroyed = hostile.hp <= 0;
+          if (destroyed) {
+            game.enemyMissiles.splice(hostileIndex, 1);
+            game.counters.enemyMissilesDestroyed += 1;
+            game.counters.missileIntercepts += 1;
+          }
+          events.push({ type:"missile_intercept", tick:game.tick, missile_id:missile.id, target_id:hostile.id, x:hostile.x, y:hostile.y, hp:Math.max(0, hostile.hp), destroyed, decision_id:missile.decision_id });
           continue;
         }
         const index = game.enemies.findIndex((enemy) => overlaps({ x:missile.x, y:missile.y, w:MISSILE.box.w, h:MISSILE.box.h }, enemy));
@@ -1971,7 +1993,7 @@
     function bossBullet(game, boss, angle, speed, events, extra = {}) {
       const tuned = bulletSpeedForDifficulty(game.difficulty, () => random01(game), speed);
       const projectile = { id:entityId(game, "ebullet"), x:boss.x, y:boss.y + boss.h / 2, vx:Math.cos(angle) * tuned.speed, vy:Math.sin(angle) * tuned.speed,
-        radius:tuned.fast ? 5 : 4, fast:tuned.fast, from_enemy_id:boss.id, boss:true, ...extra };
+        radius:tuned.fast ? 5 : 4, fast:tuned.fast, from_enemy_id:boss.id, boss:true, hp:ARMOR.boss_bullet, ...extra };
       game.enemyBullets.push(projectile);
       game.counters.enemyShots += 1;
       events.push({ type:"enemy_shot", tick:game.tick, entity_id:projectile.id, enemy_id:boss.id, pattern:"boss", fast:tuned.fast, x:projectile.x, y:projectile.y, vx:projectile.vx, vy:projectile.vy });
@@ -2011,7 +2033,7 @@
       }
       if (boss.missile_s <= 0) {
         for (let i = 0; i < BOSS.missiles.count; i += 1) {
-          const missile = { id:entityId(game, "emissile"), x:boss.x + (i - (BOSS.missiles.count - 1) / 2) * 40, y:boss.y + boss.h / 2, heading:Math.PI / 2 + (i - (BOSS.missiles.count - 1) / 2) * .9, age_s:0, from_enemy_id:boss.id };
+          const missile = { id:entityId(game, "emissile"), x:boss.x + (i - (BOSS.missiles.count - 1) / 2) * 40, y:boss.y + boss.h / 2, heading:Math.PI / 2 + (i - (BOSS.missiles.count - 1) / 2) * .9, age_s:0, from_enemy_id:boss.id, hp:ARMOR.missile };
           game.enemyMissiles.push(missile);
           game.counters.enemyMissilesFired += 1;
           events.push({ type:"enemy_missile_launch", tick:game.tick, missile_id:missile.id, enemy_id:boss.id });
@@ -2046,19 +2068,29 @@
         const box = { x:shot.x, y:shot.y, w:PLAYER_SHOT_BOX.w, h:PLAYER_SHOT_BOX.h };
         const missileIndex = game.enemyMissiles.findIndex((missile) => overlaps(box, { x:missile.x, y:missile.y, w:ENEMY_MISSILE.box.w, h:ENEMY_MISSILE.box.h }));
         if (missileIndex >= 0) {
-          events.push({ type:"shot_intercepted", tick:game.tick, shot_id:shot.id, target_id:game.enemyMissiles[missileIndex].id, target:"missile" });
-          game.enemyMissiles.splice(missileIndex, 1);
+          const hostile = game.enemyMissiles[missileIndex];
+          hostile.hp = (hostile.hp ?? 1) - 1;
+          const destroyed = hostile.hp <= 0;
+          events.push({ type:"shot_intercepted", tick:game.tick, shot_id:shot.id, target_id:hostile.id, target:"missile", hp:Math.max(0, hostile.hp), destroyed });
+          if (destroyed) {
+            game.enemyMissiles.splice(missileIndex, 1);
+            game.counters.enemyMissilesDestroyed += 1;
+          }
           game.playerBullets.splice(i, 1);
-          game.counters.enemyMissilesDestroyed += 1;
           continue;
         }
         if (shot.wingman === undefined) continue;
         const bulletIndex = game.enemyBullets.findIndex((bullet) => overlaps(box, { x:bullet.x, y:bullet.y, w:HOSTILE_BOX.w, h:HOSTILE_BOX.h }));
         if (bulletIndex >= 0) {
-          events.push({ type:"shot_intercepted", tick:game.tick, shot_id:shot.id, target_id:game.enemyBullets[bulletIndex].id, target:"bullet" });
-          game.enemyBullets.splice(bulletIndex, 1);
+          const hostile = game.enemyBullets[bulletIndex];
+          hostile.hp = (hostile.hp ?? 1) - 1;
+          const destroyed = hostile.hp <= 0;
+          events.push({ type:"shot_intercepted", tick:game.tick, shot_id:shot.id, target_id:hostile.id, target:"bullet", hp:Math.max(0, hostile.hp), destroyed });
+          if (destroyed) {
+            game.enemyBullets.splice(bulletIndex, 1);
+            game.counters.bulletsIntercepted += 1;
+          }
           game.playerBullets.splice(i, 1);
-          game.counters.bulletsIntercepted += 1;
         }
       }
     }
@@ -2336,162 +2368,11 @@
       return { events };
     }
 
-    function assessRoute(game, movement, threats, horizonMs) {
-      const arena = arenaFor(game);
-      const segments = [];
-      const end = appendMotionSegments(segments, { x:game.player.x, y:game.player.y }, movement, 0, horizonMs, arena);
-      const vulnerableStartMs = Math.max(0, finite(game.player.invincible_s, 0) * 1000);
-      const vulnerableSegments = segmentsInWindow(segments, vulnerableStartMs, horizonMs);
-      let contactMs = null;
-      let projectileContactMs = null;
-      let bodyContactMs = null;
-      let minClearance = threats.length ? Number.POSITIVE_INFINITY : null;
-
-      for (const threat of threats) {
-        const actualHalf = { x:PLAYER_W / 2 + threat.w / 2, y:PLAYER_H / 2 + threat.h / 2 };
-        const paddedHalf = { x:actualHalf.x + SAFETY_MARGIN_PX, y:actualHalf.y + SAFETY_MARGIN_PX };
-        for (const segment of segments) {
-          const clearance = segmentClearance(segment, threat, paddedHalf);
-          if (minClearance === null || clearance < minClearance) minClearance = clearance;
-        }
-        for (const segment of vulnerableSegments) {
-          const contact = sweptContact(segment, threat, actualHalf);
-          if (contact === null) continue;
-          const contactInMs = Math.max(0, contact * 1000);
-          if (contactMs === null || contactInMs < contactMs) contactMs = contactInMs;
-          if (threat.kind === "bullet" && (projectileContactMs === null || contactInMs < projectileContactMs)) projectileContactMs = contactInMs;
-          if (threat.kind === "enemy" && (bodyContactMs === null || contactInMs < bodyContactMs)) bodyContactMs = contactInMs;
-        }
-      }
-
-      const edge = edgeDistances(end, arena);
-      return {
-        id:movement,
-        safe:contactMs === null,
-        contact_ms:contactMs === null ? null : rounded(contactMs, 3),
-        projectile_contact_ms:projectileContactMs === null ? null : rounded(projectileContactMs, 3),
-        body_contact_ms:bodyContactMs === null ? null : rounded(bodyContactMs, 3),
-        clearance_px:minClearance === null ? null : rounded(minClearance, 3),
-        wall_room_px:rounded(Math.min(edge.left, edge.right, edge.top, edge.bottom), 3),
-      };
-    }
-
-    function rankRouteOptions(candidates, preferSafe) {
-      const eligible = candidates.filter((candidate) => !preferSafe || candidate.safe);
-      if (!eligible.length) return null;
-      const clearance = (candidate) => candidate.clearance_px == null ? Number.NEGATIVE_INFINITY : candidate.clearance_px;
-      const wallRoom = (candidate) => candidate.wall_room_px == null ? Number.NEGATIVE_INFINITY : candidate.wall_room_px;
-      return eligible.slice().sort((a, b) => {
-        if (!preferSafe && a.contact_ms !== b.contact_ms) return (b.contact_ms ?? Number.NEGATIVE_INFINITY) - (a.contact_ms ?? Number.NEGATIVE_INFINITY);
-        if (clearance(a) !== clearance(b)) return clearance(b) - clearance(a);
-        if (wallRoom(a) !== wallRoom(b)) return wallRoom(b) - wallRoom(a);
-        return ACTION_IDS.indexOf(a.id) - ACTION_IDS.indexOf(b.id);
-      })[0];
-    }
-
-    function assessAllRoutes(game) {
-      if (!Number.isFinite(game.player.x) || !Number.isFinite(game.player.y) || !Number.isFinite(game.player.invincible_s)) {
-        throw new Error("player position or invulnerability is not finite");
-      }
-      const threats = hostileThreats(game);
-      for (const threat of threats) {
-        for (const key of ["x", "y", "vx", "vy", "w", "h"]) {
-          if (!Number.isFinite(threat[key])) throw new Error(`threat ${threat.id} has invalid ${key}`);
-        }
-      }
-      const assessments = ACTION_IDS.map((movement) => assessRoute(game, movement, threats, 250));
-      if (assessments.some((candidate) => !Number.isFinite(candidate.wall_room_px) || candidate.contact_ms !== null && !Number.isFinite(candidate.contact_ms))) {
-        throw new Error("route assessment produced non-finite results");
-      }
-      return assessments;
-    }
-
-    function coordinateAction(game, proposal) {
-      const authorizedProposal = proposal && ACTION_IDS.includes(proposal.movement) ? { ...proposal } : null;
-      let assessments;
-      try {
-        assessments = assessAllRoutes(game);
-      } catch (error) {
-        return {
-          effective_command:authorizedProposal,
-          use_bomb:false,
-          events:[{ type:"safety_calculation_failed", tick:game.tick, decision_id:authorizedProposal?.decision_id ?? null, reason:String(error.message || error) }],
-        };
-      }
-
-      const routeById = new Map(assessments.map((candidate) => [candidate.id, candidate]));
-      const holdRoute = routeById.get("hold");
-      const proposedMovement = authorizedProposal?.movement ?? "hold";
-      const proposedRoute = routeById.get(proposedMovement);
-      const shouldRescueNeutral = !authorizedProposal && !holdRoute.safe;
-      if (authorizedProposal && proposedRoute.safe || !authorizedProposal && !shouldRescueNeutral) {
-        return { effective_command:authorizedProposal, use_bomb:false, events:[] };
-      }
-
-      const safeRouteAvailable = assessments.some((candidate) => candidate.safe);
-      const selectedRoute = rankRouteOptions(assessments, safeRouteAvailable);
-      if (!selectedRoute) {
-        return {
-          effective_command:authorizedProposal,
-          use_bomb:false,
-          events:[{ type:"safety_calculation_failed", tick:game.tick, decision_id:authorizedProposal?.decision_id ?? null, reason:"no_route_assessment" }],
-        };
-      }
-
-      const baselineMovement = proposedMovement;
-      const movementChanged = selectedRoute.id !== baselineMovement;
-      const effectiveCommand = authorizedProposal
-        ? movementChanged ? { ...authorizedProposal, movement:selectedRoute.id, model_movement:authorizedProposal.movement, source:"local_safety" } : authorizedProposal
-        : {
-          decision_id:null,
-          sequence:null,
-          movement:selectedRoute.id,
-          fire:"cease",
-          lease:null,
-          intent:null,
-          model_movement:null,
-          source:"local_safety",
-        };
-      const events = [];
-      if (movementChanged) {
-        game.counters.safetyOverrides += 1;
-        events.push({
-          type:"safety_override",
-          tick:game.tick,
-          decision_id:authorizedProposal?.decision_id ?? null,
-          sequence:authorizedProposal?.sequence ?? null,
-          proposed_movement:baselineMovement,
-          effective_movement:selectedRoute.id,
-          safe_route_available:safeRouteAvailable,
-          candidate_assessments:assessments,
-        });
-      }
-      if (!safeRouteAvailable) {
-        events.push({
-          type:"safety_escape_unavailable",
-          tick:game.tick,
-          decision_id:authorizedProposal?.decision_id ?? null,
-          sequence:authorizedProposal?.sequence ?? null,
-          selected_movement:selectedRoute.id,
-          safe_route_available:false,
-          candidate_assessments:assessments,
-        });
-      }
-      return { effective_command:effectiveCommand, use_bomb:false, events };
-    }
-
+    // v15: the model's command is what the ship does. There is no local safety override (the former "hybrid" mode
+    // re-routed the ship around threats behind the model's back); a hit the model walks into is taken.
     function stepPolicyTick(game, modelProposal) {
-      if (game.policy_mode === "djev-only") {
-        const stepped = stepGame(game, modelProposal);
-        return { model_proposal:modelProposal ? clone(modelProposal) : null, effective_command:modelProposal ? clone(modelProposal) : null, events:stepped.events };
-      }
-      const coordinated = coordinateAction(game, modelProposal);
-      const stepped = stepGame(game, coordinated.effective_command);
-      return {
-        model_proposal:modelProposal ? clone(modelProposal) : null,
-        effective_command:coordinated.effective_command ? clone(coordinated.effective_command) : null,
-        events:[...coordinated.events, ...stepped.events],
-      };
+      const stepped = stepGame(game, modelProposal);
+      return { model_proposal:modelProposal ? clone(modelProposal) : null, effective_command:modelProposal ? clone(modelProposal) : null, events:stepped.events };
     }
 
     function serializeGame(game) {
@@ -2588,10 +2469,10 @@
 
     globalThis.SpaceDecisionCore = Object.freeze({
       ENGINE_VERSION, DT_MS, ACTION_IDS, FIRE_IDS, BOMB_IDS, ASSIST_IDS, MISSILE, BOMB, WEAPON, PICKUP, PICKUP_KINDS, EXTRA_LIFE, WINGMAN, BOSS, ENEMY_MISSILE, LEASE_TICKS, LEASE_MS, RULES, DEFAULT_DIFFICULTY, HARDEST_DIFFICULTY, LEGACY_MAX_DIFFICULTY, MAX_DIFFICULTY,
-      createGame, stepGame, coordinateAction, stepPolicyTick, observeGame, serializeGame, restoreGame, hashGame, gameStatus,
-      sampledFuturesForecast, sampledFutureSample, mergeSampledFutures, SAMPLED_FUTURES, SHIELD, ASSIST, STAGE, MISSION, normalizeDifficulty, arenaFor, velocityFor, waveProfile, baseEnemyCountForWave, enemyCountForWave,
+      createGame, stepGame, stepPolicyTick, observeGame, serializeGame, restoreGame, hashGame, gameStatus,
+      sampledFuturesForecast, sampledFutureSample, mergeSampledFutures, SAMPLED_FUTURES, SHIELD, ASSIST, STAGE, MISSION, ARMOR, normalizeDifficulty, arenaFor, velocityFor, waveProfile, baseEnemyCountForWave, enemyCountForWave,
       fireIntervalForDifficulty, bulletSpeedForDifficulty, rulesManifest, missileCap, bonusMissileCap,
-      _private: Object.freeze({ sweptContact, segmentClearance, hostileThreats, stableStringify, rankRouteOptions }),
+      _private: Object.freeze({ sweptContact, segmentClearance, hostileThreats, stableStringify }),
     });
   })();
   </script>
@@ -4165,6 +4046,12 @@
         px(x - 1, y - 2, 2, 4, outer);
         px(x - 1, y - 1, 2, 2, inner);
       }
+      // v15 armor: an intact shell shows as a grey outline; one hit strips it, the next breaks the bullet.
+      if ((shot.hp ?? 1) >= 2) {
+        const r = shot.fast ? 4 : 3;
+        px(x - r, y - 1, 1, 2, "G"); px(x + r, y - 1, 1, 2, "G");
+        px(x - 1, y - r, 2, 1, "G"); px(x - 1, y + r, 2, 1, "G");
+      }
     }
 
     // ---- Wave briefing (visual only: never pauses the simulation or blocks input) ----
@@ -4482,6 +4369,8 @@
 
       game.enemyMissiles.forEach((missile) => {
         blit(rotatedSprite("enemy_missile", missile.heading + Math.PI / 2), missile.x, missile.y);
+        // Armor pips: one per point left (v15).
+        for (let i = 0; i < (missile.hp ?? 1); i += 1) px(lx(missile.x) - 3 + i * 3, lx(missile.y) - 7, 2, 1, "G");
       });
 
       (game.bossBombs || []).forEach((shell) => {

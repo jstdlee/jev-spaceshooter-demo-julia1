@@ -1007,115 +1007,6 @@ test('a dangerous valid recover action moves into contact unchanged and starts t
   assert.ok(stepped.events.some((event) => event.type === 'hit'));
 });
 
-test('the coordinator preserves an authorized movement when every route is clear', () => {
-  const { core } = loadModules();
-  const game = cleanForecastGame(core);
-  const proposal = { movement: 'down', fire: 'shoot', decision_id: 'proposal-safe', sequence: 7, source: 'djev' };
-  const result = core.coordinateAction(game, proposal);
-
-  assert.equal(result.effective_command.movement, 'down');
-  assert.equal(result.effective_command.fire, 'shoot');
-  assert.equal(result.effective_command.decision_id, 'proposal-safe');
-  assert.equal(result.use_bomb, false);
-  assert.equal(result.events.length, 0);
-});
-
-test('the coordinator replaces a dangerous proposed route with a safe route', () => {
-  const { core } = loadModules();
-  const game = cleanForecastGame(core);
-  game.enemyBullets = [bullet({ id: 'below-ship', x: 200, y: 318 })];
-  const proposal = { movement: 'down', fire: 'shoot', decision_id: 'proposal-danger', sequence: 8, source: 'djev' };
-  const result = core.coordinateAction(game, proposal);
-  const override = result.events.find((event) => event.type === 'safety_override');
-
-  assert.notEqual(result.effective_command.movement, 'down');
-  assert.equal(result.effective_command.fire, 'shoot');
-  assert.equal(result.effective_command.decision_id, 'proposal-danger');
-  assert.equal(result.effective_command.source, 'local_safety');
-  assert.equal(override.proposed_movement, 'down');
-  assert.equal(override.effective_movement, result.effective_command.movement);
-  assert.equal(override.safe_route_available, true);
-});
-
-test('without a fresh proposal the coordinator dodges an unsafe hold and never authorizes fire', () => {
-  const { core } = loadModules();
-  const game = cleanForecastGame(core);
-  game.enemyBullets = [bullet({ id: 'incoming', x: 200, y: 278, vy: 100 })];
-  const result = core.coordinateAction(game, null);
-
-  assert.ok(result.effective_command);
-  assert.notEqual(result.effective_command.movement, 'hold');
-  assert.equal(result.effective_command.fire, 'cease');
-  assert.equal(result.effective_command.source, 'local_safety');
-  assert.equal(result.effective_command.decision_id, null);
-});
-
-test('without a fresh proposal and with safe hold the coordinator leaves movement neutral', () => {
-  const { core } = loadModules();
-  const game = cleanForecastGame(core);
-  const result = core.coordinateAction(game, null);
-
-  assert.equal(result.effective_command, null);
-  assert.equal(result.events.length, 0);
-});
-
-test('known invulnerability prevents the coordinator from overriding an intersecting proposal', () => {
-  const { core } = loadModules();
-  const game = cleanForecastGame(core, { invincible_s: 1 });
-  game.enemyBullets = [bullet({ id: 'covered-by-invulnerability', x: 200, y: 300 })];
-  const proposal = { movement: 'down', fire: 'shoot', decision_id: 'proposal-invulnerable', sequence: 9, source: 'djev' };
-  const result = core.coordinateAction(game, proposal);
-
-  assert.equal(result.effective_command.movement, 'down');
-  assert.equal(result.events.some((event) => event.type === 'safety_override'), false);
-});
-
-test('when all routes collide the coordinator reports that no safe escape exists', () => {
-  const { core } = loadModules();
-  const game = cleanForecastGame(core);
-  game.enemies = [scoutEnemy({ id: 'body-overlap', x: 200, y: 300 })];
-  const proposal = { movement: 'hold', fire: 'cease', decision_id: 'proposal-trapped', sequence: 10, source: 'djev' };
-  const result = core.coordinateAction(game, proposal);
-
-  const trapped = result.events.find((event) => event.type === 'safety_escape_unavailable');
-  assert.ok(trapped);
-  assert.equal(trapped.safe_route_available, false);
-  assert.equal(trapped.candidate_assessments.length, 9);
-  assert.ok(trapped.candidate_assessments.every((candidate) => candidate.contact_ms !== null));
-});
-
-test('route ranking prefers clearance, then wall room, then stable action order', () => {
-  const { core } = loadModules();
-  const routes = [
-    { id: 'left', safe: true, contact_ms: null, clearance_px: 20, wall_room_px: 4 },
-    { id: 'right', safe: true, contact_ms: null, clearance_px: 19, wall_room_px: 100 },
-    { id: 'up', safe: true, contact_ms: null, clearance_px: 20, wall_room_px: 7 },
-    { id: 'down', safe: true, contact_ms: null, clearance_px: 20, wall_room_px: 7 },
-    { id: 'hold', safe: true, contact_ms: null, clearance_px: 18, wall_room_px: 90 },
-  ];
-  const trappedRoutes = [
-    { id: 'right', safe: false, contact_ms: 80, clearance_px: 5, wall_room_px: 20 },
-    { id: 'left', safe: false, contact_ms: 80, clearance_px: 5, wall_room_px: 20 },
-    { id: 'up', safe: false, contact_ms: 40, clearance_px: 40, wall_room_px: 100 },
-  ];
-
-  assert.equal(core._private.rankRouteOptions(routes, true).id, 'up');
-  assert.equal(core._private.rankRouteOptions(trappedRoutes, false).id, 'left');
-});
-
-test('a failed safety assessment preserves an authorized route and records the failure', () => {
-  const { core } = loadModules();
-  const game = cleanForecastGame(core);
-  game.enemyBullets = null;
-  const proposal = { movement: 'left', fire: 'shoot', decision_id: 'proposal-fallback', sequence: 11, source: 'djev' };
-  const result = core.coordinateAction(game, proposal);
-
-  assert.equal(result.effective_command.movement, 'left');
-  assert.equal(result.effective_command.decision_id, 'proposal-fallback');
-  assert.equal(result.use_bomb, false);
-  assert.equal(result.events[0].type, 'safety_calculation_failed');
-});
-
 test('medium forecasts report move contact, two-step escape options, and endpoint crowding', () => {
   const { core } = loadModules();
   const open = cleanForecastGame(core, { x: 480, y: 400 });
@@ -1665,19 +1556,54 @@ test('controller carries a Djev bomb choice onto the active command and rejects 
   assert.equal(rejected.events[0].reason, 'unknown_bomb');
 });
 
-test('canonical policy ticks return the proposal separately from the effective command', () => {
+test('v15: no local safety override - the model\'s move is executed even into a bullet, and hybrid mode is refused', () => {
   const { core } = loadModules();
+  assert.equal(core.coordinateAction, undefined, 'the override is gone from the engine');
+  assert.throws(() => core.createGame({ ...makeManifest(), policy_mode: 'hybrid' }), /no local safety override/);
   const game = cleanForecastGame(core, { x: 200, y: 300 });
-  game.policy_mode = 'hybrid';
   game.enemyBullets = [bullet({ id: 'tick-risk', x: 200, y: 318 })];
   const proposal = { movement: 'down', fire: 'shoot', decision_id: 'proposal-tick', sequence: 12, source: 'djev' };
   const result = core.stepPolicyTick(game, proposal);
+  assert.equal(result.effective_command.movement, 'down');
+  assert.equal(result.effective_command.source, 'djev');
+  assert.ok(!result.events.some((event) => event.type === 'safety_override'));
+});
 
-  assert.equal(result.model_proposal.movement, 'down');
-  assert.notEqual(result.effective_command.movement, 'down');
-  assert.equal(result.effective_command.decision_id, 'proposal-tick');
-  assert.equal(result.effective_command.source, 'local_safety');
-  assert.ok(result.events.some((event) => event.type === 'safety_override'));
+test('v15 armor: a bullet takes two escort hits, an enemy missile three; bombs still clear them at once', () => {
+  const { core } = loadModules();
+  const game = quietGame(core, { x: 480, y: 560 });
+  game.enemyBullets = [{ ...bullet({ id: 'armored', x: 300, y: 200, vy: 0 }), hp: core.ARMOR.bullet }];
+  const escortShot = (id) => ({ id, x: 300, y: 200, vx: 0, vy: 0, radius: 2, level: 0, wingman: 0 });
+  game.playerBullets = [escortShot('e1')];
+  core.stepGame(game, null);
+  assert.equal(game.enemyBullets.length, 1, 'one hit only strips the armor');
+  assert.equal(game.enemyBullets[0].hp, 1);
+  game.playerBullets = [escortShot('e2')];
+  core.stepGame(game, null);
+  assert.equal(game.enemyBullets.length, 0, 'the second hit breaks it');
+  game.enemyMissiles = [{ id: 'em', x: 300, y: 200, heading: Math.PI / 2, age_s: 0, hp: core.ARMOR.missile }];
+  for (let i = 0; i < 2; i += 1) {
+    game.playerBullets = [{ id: `g${i}`, x: game.enemyMissiles[0].x, y: game.enemyMissiles[0].y, vx: 0, vy: 0, radius: 3, level: 0 }];
+    core.stepGame(game, null);
+  }
+  assert.equal(game.enemyMissiles.length, 1, 'two hits leave the missile flying');
+  game.bomb.charges = 1;
+  game.enemyMissiles[0].x = game.player.x + 50; game.enemyMissiles[0].y = game.player.y - 50;
+  core.stepGame(game, { movement: 'hold', fire: 'cease', decision_id: 'bomb-it', sequence: 3, source: 'djev', bomb: 'detonate' });
+  assert.equal(game.enemyMissiles.length, 0, 'a bomb clears armor at once');
+});
+
+test('v15 fairness: the sampled futures cannot see when the formation fires next or when a boss arrives', () => {
+  const { core } = loadModules();
+  const game = quietGame(core, { x: 480, y: 500 });
+  game.enemies = [scoutEnemy({ id: 's', x: 480, y: 100 })];
+  game.enemyFireClock_s = 0.01;
+  game.boss.clock_s = 0.05;
+  const a = core.sampledFutureSample(game, 0, { hold_ticks: 3, follow_ticks: 0 });
+  game.enemyFireClock_s = 0.5;
+  game.boss.clock_s = 999;
+  const b = core.sampledFutureSample(game, 0, { hold_ticks: 3, follow_ticks: 0 });
+  assert.deepEqual(a, b, 'hidden timers do not change the forecast');
 });
 
 test('missing, invalid, and stale atomic replies produce neutral command state', () => {

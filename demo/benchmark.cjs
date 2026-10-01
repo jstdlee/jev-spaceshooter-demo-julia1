@@ -90,7 +90,7 @@ function assertFunction(obj, name, owner) {
 }
 
 function validateRuntimeContract(core, controller) {
-  for (const name of ['createGame', 'stepGame', 'coordinateAction', 'stepPolicyTick', 'observeGame', 'serializeGame', 'restoreGame', 'hashGame', 'gameStatus']) {
+  for (const name of ['createGame', 'stepGame', 'stepPolicyTick', 'observeGame', 'serializeGame', 'restoreGame', 'hashGame', 'gameStatus']) {
     assertFunction(core, name, 'SpaceDecisionCore');
   }
   for (const name of ['createController', 'beginDecision', 'receiveDecision', 'commandForTick', 'finishDecision', 'invalidateController']) {
@@ -1600,7 +1600,8 @@ function parseArgs(argv) {
   if (!Number.isInteger(options.seed)) throw new Error('--seed must be an integer');
   if (!Number.isFinite(options.targetSeconds) || options.targetSeconds <= 0) throw new Error('--target-seconds must be positive');
   if (!Number.isFinite(options.maxLagMs) || options.maxLagMs <= 0) throw new Error('--max-lag-ms must be positive');
-  if (!['djev-only', 'hybrid'].includes(options.policyMode)) throw new Error('--policy-mode must be djev-only or hybrid');
+  // Engine v15 has no local safety override, so djev-only is the only policy.
+  if (options.policyMode !== 'djev-only') throw new Error('--policy-mode must be djev-only (engine v15 has no local safety override)');
   return options;
 }
 
