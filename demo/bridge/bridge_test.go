@@ -444,7 +444,7 @@ func TestPickupLabelsAndRanks(t *testing.T) {
 	if got := criteria.Get("left__medium"); got != "Tier 6 DEADLY: a threat hits the ship in 125 ms." {
 		t.Fatalf("deadly collect: %q", got)
 	}
-	medium(body, 2)["pickup_toward"] = "shield"
+	medium(body, 2)["pickup_toward"] = "laser"
 	_, _, err = buildPathCriteria(requestFor(t, body))
 	expectAPIError(t, err, 400)
 }
@@ -1114,9 +1114,8 @@ func TestHomeZoneTierAndTags(t *testing.T) {
 }
 
 func TestFutureTiersLabelsAndOracle(t *testing.T) {
-	row := func(survival float64, clear int64, startX, startY, endX, endY float64) PathRow {
-		return PathRow{WallRoom: 200, Motion: "turns", EndX: endX, Futures: &FutureRow{Survival: survival, Clear: clear, Futures: 4},
-			ZoneStartOut: stationOutside(startX, startY), ZoneEndOut: stationOutside(endX, endY)}
+	row := func(survival float64, clear int64) PathRow {
+		return PathRow{WallRoom: 200, Motion: "turns", EndX: 480, EndY: 400, Futures: &FutureRow{Survival: survival, Clear: clear, Futures: 4}}
 	}
 	cases := []struct {
 		name  string
@@ -1124,13 +1123,11 @@ func TestFutureTiersLabelsAndOracle(t *testing.T) {
 		tier  string
 		label string
 	}{
-		{"all futures, in station", row(1, 4, 480, 530, 470, 530), "GOOD", "Tier 1 GOOD: safe in all 4 futures."},
-		{"all futures, leaves station", row(1, 4, 480, 440, 480, 420), "OK", "Tier 2 OK: safe in all 4 futures, leaves zone."},
-		{"all futures, heads back", row(1, 4, 480, 380, 480, 400), "GOOD", "Tier 1 GOOD: safe in all 4 futures, back to zone."},
-		{"most futures", row(0.95, 3, 480, 530, 470, 530), "OK", "Tier 2 OK: hit in 1 of 4 futures."},
-		{"some futures", row(0.7, 2, 480, 530, 470, 530), "RISKY", "Tier 3 RISKY: hit in 2 of 4 futures."},
-		{"mostly hit", row(0.4, 0, 480, 530, 470, 530), "DOOMED", "Tier 5 DOOMED: hit in 4 of 4 futures, mostly hit."},
-		{"every future hit", row(0, 0, 480, 530, 470, 530), "DEADLY", "Tier 6 DEADLY: the ship is hit in every sampled future."},
+		{"all futures", row(1, 4), "GOOD", "Tier 1 GOOD: safe in all 4 futures."},
+		{"most futures", row(0.95, 3), "OK", "Tier 2 OK: hit in 1 of 4 futures."},
+		{"some futures", row(0.7, 2), "RISKY", "Tier 3 RISKY: hit in 2 of 4 futures."},
+		{"mostly hit", row(0.4, 0), "DOOMED", "Tier 5 DOOMED: hit in 4 of 4 futures, mostly hit."},
+		{"every future hit", row(0, 0), "DEADLY", "Tier 6 DEADLY: the ship is hit in every sampled future."},
 	}
 	for _, tc := range cases {
 		if got := pathTier(tc.r); got != tc.tier {
@@ -1140,12 +1137,13 @@ func TestFutureTiersLabelsAndOracle(t *testing.T) {
 			t.Errorf("%s: label %q, want %q", tc.name, got, tc.label)
 		}
 	}
-	// The oracle ranks by tier, then futures survived.
-	criteria := map[string]any{
-		"a": pathLabel(row(0.95, 3, 480, 530, 470, 530)),
-		"b": pathLabel(row(1, 4, 480, 530, 470, 530)),
-		"c": pathLabel(row(0.7, 2, 480, 530, 470, 530)),
+	nearWall := row(1, 4)
+	nearWall.WallRoom = 40
+	if got := pathTier(nearWall); got != "OK" {
+		t.Errorf("near wall: tier %s, want OK", got)
 	}
+	// The oracle ranks by tier, then futures survived.
+	criteria := map[string]any{"a": pathLabel(row(0.95, 3)), "b": pathLabel(row(1, 4)), "c": pathLabel(row(0.7, 2))}
 	if got := oracleChoice(criteria, []string{"a", "b", "c"}); got != "b" {
 		t.Errorf("oracle picked %s, want b", got)
 	}
@@ -1155,7 +1153,7 @@ func TestPositionBehindDropsATier(t *testing.T) {
 	mk := func(survival, x, y float64) PathRow {
 		return PathRow{WallRoom: 200, EndX: x, EndY: y, Futures: &FutureRow{Survival: survival, Clear: 4, Futures: 4}}
 	}
-	rows := []PathRow{mk(1, 480, 530), mk(1, 470, 520), mk(1, 300, 400), mk(0.9, 480, 530)}
+	rows := []PathRow{mk(1, 480, 400), mk(1, 470, 380), mk(1, 60, 590), mk(0.9, 40, 40)}
 	markPositionBehind(rows)
 	want := []bool{false, false, true, false}
 	for i, w := range want {
@@ -1185,5 +1183,85 @@ func TestMountHandlerRoutesByPrefix(t *testing.T) {
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v2?futures=2", nil))
 	if rec.Code != http.StatusMovedPermanently || rec.Header().Get("Location") != "/v2/?futures=2" {
 		t.Errorf("/v2 redirect: %d %q", rec.Code, rec.Header().Get("Location"))
+	}
+}
+
+func TestAssistQuestionIsTriggeredByAWildField(t *testing.T) {
+	calm := &AssistFacts{Charges: 1, Bullets: 30, WildBullets: 60, BlockEndWave: 10}
+	if buildAssistCriteria(calm, BombFacts{Charges: 2}, 6) != nil {
+		t.Error("a calm field must not ask the assist question")
+	}
+	used := &AssistFacts{Charges: 0, Bullets: 120, WildBullets: 60, BlockEndWave: 10}
+	if buildAssistCriteria(used, BombFacts{}, 6) != nil {
+		t.Error("no strike left: no question")
+	}
+	wild := &AssistFacts{Charges: 1, Bullets: 70, WildBullets: 60, BlockEndWave: 10}
+	if c := buildAssistCriteria(wild, BombFacts{Charges: 2}, 2); !strings.HasPrefix(c.Get("hold").(string), "Rank 1 SAVE") {
+		t.Errorf("a safe move exists: %v", c.Get("hold"))
+	}
+	if c := buildAssistCriteria(wild, BombFacts{Charges: 2}, 6); !strings.HasPrefix(c.Get("hold").(string), "Rank 1 SAVE") {
+		t.Errorf("the bomb can still help: %v", c.Get("hold"))
+	}
+	if c := buildAssistCriteria(wild, BombFacts{}, 6); !strings.HasPrefix(c.Get("call").(string), "Rank 1 CALL NOW") {
+		t.Errorf("doomed, no bomb: %v", c.Get("call"))
+	}
+	wilder := &AssistFacts{Charges: 1, Bullets: 95, WildBullets: 60, BlockEndWave: 10}
+	if c := buildAssistCriteria(wilder, BombFacts{Charges: 3}, 5); !strings.HasPrefix(c.Get("call").(string), "Rank 1 CALL NOW") {
+		t.Errorf("past 1.5x wild the strike beats the bomb: %v", c.Get("call"))
+	}
+	// Not asked: the strike holds. Asked: the answer must be valid.
+	base := `"path":{"choice":"left__medium"},"fire":{"choice":"shoot"},"bomb":{"choice":"hold"}`
+	if got := normalizeDecisionResponse(decode(t, `{"answers":{`+base+`}}`))["assist"]; got != "hold" {
+		t.Errorf("unasked assist = %v", got)
+	}
+	if got := normalizeDecisionResponse(decode(t, `{"answers":{`+base+`,"assist":{"choice":"call"}}}`), true)["assist"]; got != "call" {
+		t.Errorf("asked assist = %v", got)
+	}
+	if got := normalizeDecisionResponse(decode(t, `{"answers":{`+base+`}}`), true)["valid_choice"]; got != false {
+		t.Error("an asked but missing assist answer must invalidate the decision")
+	}
+}
+
+func TestLeaderboardRanksFinishedRunsOnce(t *testing.T) {
+	f := newFixture(t)
+	submit := func(runID, name string, timeS float64) (map[string]any, error) {
+		return f.server.SubmitLeaderboard(map[string]any{"run_id": runID, "name": name, "time_s": json.Number(fmt.Sprint(timeS)),
+			"score": json.Number("1200"), "wave": json.Number("2"), "mode": "autopilot", "reason": "death"})
+	}
+	end := func(runID string) {
+		if _, err := f.server.EndRun(map[string]any{"schema_version": json.Number("1"), "run_id": runID, "last_event_id": json.Number("0"), "terminal": terminalBody()}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	first := f.start()
+	if _, err := submit(first, "Julia", 40); err == nil {
+		t.Fatal("an unfinished run must not enter the board")
+	}
+	end(first)
+	if _, err := submit(first, "<script>", 40); err == nil {
+		t.Fatal("names are letters, digits and simple punctuation only")
+	}
+	if _, err := submit(first, "Julia 1", 40); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := submit(first, "Julia 1", 41); err == nil {
+		t.Fatal("a run enters the board once")
+	}
+	second := f.start()
+	end(second)
+	result, err := submit(second, "Lei", 75.5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result["rank"] != 1 {
+		t.Fatalf("the longer run ranks first, got %v", result["rank"])
+	}
+	board, err := f.server.Leaderboard()
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries := board["entries"].([]LeaderboardEntry)
+	if len(entries) != 2 || entries[0].Name != "Lei" || entries[1].Name != "Julia 1" {
+		t.Fatalf("board %+v", entries)
 	}
 }

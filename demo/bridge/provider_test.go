@@ -60,7 +60,7 @@ func TestParseProviderValidatesAndScopesServerKey(t *testing.T) {
 func TestPayloadFlavors(t *testing.T) {
 	path, bomb := NewOrderedMap().Set("a", "A"), NewOrderedMap().Set("hold", "H")
 	for flavor, want := range map[string][2]bool{"julia": {true, true}, "djev": {false, true}, "laya": {false, false}} {
-		wire, _ := marshalCompact(buildUpstreamPayload("m", "p", NewOrderedMap(), path, bomb, flavor))
+		wire, _ := marshalCompact(buildUpstreamPayload("m", "p", NewOrderedMap(), path, bomb, nil, flavor))
 		text := string(wire)
 		if strings.Contains(text, "option_questions") != want[0] || strings.Contains(text, `"samples":1`) != want[1] {
 			t.Errorf("%s: %s", flavor, text)

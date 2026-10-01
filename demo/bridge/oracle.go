@@ -122,6 +122,13 @@ func (oracleUpstream) Call(_ context.Context, body []byte) (*UpstreamResult, err
 	if bomb, ok := payload.Questions["bomb"]; ok {
 		answers["bomb"] = map[string]any{"choice": oracleBomb(bomb.Criteria), "confidence": 1}
 	}
+	if assist, ok := payload.Questions["assist"]; ok {
+		choice := "hold"
+		if label, _ := assist.Criteria["call"].(string); strings.HasPrefix(label, "Rank 1") {
+			choice = "call"
+		}
+		answers["assist"] = map[string]any{"choice": choice, "confidence": 1}
+	}
 	raw, _ := json.Marshal(map[string]any{"model": "oracle", "answers": answers})
 	return okUpstream(raw), nil
 }

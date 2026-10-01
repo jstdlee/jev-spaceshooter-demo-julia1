@@ -84,10 +84,13 @@ type Server struct {
 	exchanges exchangeLog
 	// afterUpstreamLock is a test hook run after a decision acquires the run's upstream slot.
 	afterUpstreamLock func(*RunState)
+	// board is the ranking board of this demo (<runs-dir>/leaderboard.json).
+	board *leaderboard
 }
 
 func NewServer(cfg Config, upstream Upstream) *Server {
-	return &Server{cfg: cfg, upstream: upstream, runs: map[string]*RunState{}, started: time.Now()}
+	return &Server{cfg: cfg, upstream: upstream, runs: map[string]*RunState{}, started: time.Now(),
+		board: &leaderboard{path: filepath.Join(cfg.RunsDir, "leaderboard.json")}}
 }
 
 func utcNow() string { return time.Now().UTC().Format("2006-01-02T15:04:05.000Z") }
@@ -331,7 +334,7 @@ func (s *Server) StartRun(body any) (map[string]any, error) {
 func nullDecision(request *DecisionRequest, id string, apiOK bool, errText string, latencyMs float64) map[string]any {
 	return map[string]any{
 		"schema_version": SchemaVersion, "run_id": request.RunID, "epoch": request.Epoch, "sequence": request.Sequence,
-		"decision_id": id, "intent": nil, "movement": nil, "fire": nil, "lease": nil, "bomb": nil,
+		"decision_id": id, "intent": nil, "movement": nil, "fire": nil, "lease": nil, "bomb": nil, "assist": nil,
 		"valid_choice": false, "api_ok": apiOK, "error": errText, "latency_ms": round(latencyMs, 1),
 		"usage":      map[string]any{"input_tokens": nil, "output_tokens": nil},
 		"confidence": nullConfidence(), "api_token_throughput": nil,
@@ -372,11 +375,15 @@ func (s *Server) HandleDecision(ctx context.Context, body any) (map[string]any, 
 	criteria, bestTier, err := buildPathCriteria(request)
 	var packed *OrderedMap
 	var bomb BombFacts
+	var assist *AssistFacts
 	if err == nil {
 		packed, err = packModelContext(request)
 	}
 	if err == nil {
 		bomb, err = bombFacts(request.State["bomb"])
+	}
+	if err == nil {
+		assist, err = assistFacts(request.State["assist"])
 	}
 	if err != nil {
 		var budget *ContextBudgetExceeded
@@ -405,7 +412,8 @@ func (s *Server) HandleDecision(ctx context.Context, body any) (map[string]any, 
 
 	identity := run.identity()
 	bombCriteria := buildBombCriteria(bomb, bestTier)
-	payload := buildUpstreamPayload(fmt.Sprint(identity["configured_model"]), run.PromptText, packed, criteria, bombCriteria, run.provider.Flavor)
+	assistCriteria := buildAssistCriteria(assist, bomb, bestTier)
+	payload := buildUpstreamPayload(fmt.Sprint(identity["configured_model"]), run.PromptText, packed, criteria, bombCriteria, assistCriteria, run.provider.Flavor)
 	// The exact wire bytes are logged before transport and reused for the request itself.
 	wire, err := marshalCompact(payload)
 	if err != nil {
@@ -466,7 +474,7 @@ func (s *Server) HandleDecision(ctx context.Context, body any) (map[string]any, 
 	apiOK := upstream.Status != nil && *upstream.Status >= 200 && *upstream.Status < 300 && upstream.Error == nil
 	var normalized map[string]any
 	if apiOK {
-		normalized = normalizeDecisionResponse(upstream.Parsed)
+		normalized = normalizeDecisionResponse(upstream.Parsed, assistCriteria != nil)
 	} else {
 		errText := ""
 		if upstream.Error != nil {
@@ -474,7 +482,7 @@ func (s *Server) HandleDecision(ctx context.Context, body any) (map[string]any, 
 		} else if upstream.Status != nil {
 			errText = fmt.Sprintf("upstream_status_%d", *upstream.Status)
 		}
-		normalized = map[string]any{"intent": nil, "movement": nil, "fire": nil, "lease": nil, "bomb": nil, "valid_choice": false, "confidence": nullConfidence(), "error": errText}
+		normalized = map[string]any{"intent": nil, "movement": nil, "fire": nil, "lease": nil, "bomb": nil, "assist": nil, "valid_choice": false, "confidence": nullConfidence(), "error": errText}
 	}
 	if parsed, ok := upstream.Parsed.(map[string]any); ok {
 		if model, ok := parsed["model"].(string); ok {
@@ -491,11 +499,14 @@ func (s *Server) HandleDecision(ctx context.Context, body any) (map[string]any, 
 	result := map[string]any{
 		"schema_version": SchemaVersion, "run_id": run.RunID, "epoch": request.Epoch, "sequence": request.Sequence,
 		"decision_id": id, "intent": normalized["intent"], "movement": normalized["movement"],
-		"fire": normalized["fire"], "lease": normalized["lease"], "bomb": normalized["bomb"], "valid_choice": normalized["valid_choice"],
+		"fire": normalized["fire"], "lease": normalized["lease"], "bomb": normalized["bomb"], "assist": normalized["assist"], "valid_choice": normalized["valid_choice"],
 		"api_ok": apiOK, "error": normalized["error"], "latency_ms": round(upstream.ElapsedS*1000, 1),
 		"usage": usage, "confidence": normalized["confidence"], "api_token_throughput": throughput,
 		// The exact labels Djev chose from, so the page can show the decision as the model saw it.
 		"labels": map[string]any{"path": criteria, "bomb": bombCriteria},
+	}
+	if assistCriteria != nil {
+		result["labels"].(map[string]any)["assist"] = assistCriteria
 	}
 	valid := normalized["valid_choice"] == true
 	run.eventMu.Lock()

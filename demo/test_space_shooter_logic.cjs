@@ -1215,7 +1215,8 @@ test('clearing every fifth wave grants one extra life, up to five', () => {
   const { core } = loadModules();
   assert.equal(core.EXTRA_LIFE.every_waves, 5);
   const game = cleanForecastGame(core, { x: 480, y: 550 });
-  const clearWave = (wave) => { game.wave = wave; game.waveActive = true; game.enemies = []; return core.stepGame(game, null).events; };
+  // v15: a wave is a timed stage, so it ends when the stage clock runs out.
+  const clearWave = (wave) => { game.wave = wave; game.waveActive = true; game.enemies = []; game.waveClock_s = core.STAGE.duration_s; return core.stepGame(game, null).events; };
   assert.equal(game.player.lives, 3);
   for (const wave of [1, 2, 3, 4, 6, 9]) assert.ok(!clearWave(wave).some((e) => e.type === 'extra_life'), `no life for clearing wave ${wave}`);
   const bonus = clearWave(5).find((e) => e.type === 'extra_life');
@@ -1234,6 +1235,7 @@ test('a new wave keeps bullets in flight instead of clearing them', () => {
   const game = cleanForecastGame(core, { x: 480, y: 550 });
   game.waveActive = true;
   game.enemies = [];
+  game.waveClock_s = core.STAGE.duration_s;
   game.enemyBullets = [bullet({ id: 'old-wave-bullet', x: 100, y: 100, vy: 50 })];
   game.playerBullets = [{ id: 'old-shot', x: 300, y: 300, vx: 0, vy: -580, radius: 3 }];
   core.stepGame(game, null);
@@ -1865,9 +1867,10 @@ test('pickups spawn at a seeded random spot near the ship, inside the drift band
     const game = quietGame(core, ship);
     game.pickups = [];
     game.pickupClock_s = { bomb: 0.001, weapon: 0.001, wingman: 99, missile: 0.001 };
-    core.stepGame(game, { movement: 'hold', fire: 'cease', decision_id: 'p', sequence: 1, source: 'djev' });
-    assert.equal(game.pickups.length, 3);
-    for (const p of game.pickups) {
+    // Spawn events, not the field: a pickup clamped into the band can land on the ship and be collected at once.
+    const spawned = core.stepGame(game, { movement: 'hold', fire: 'cease', decision_id: 'p', sequence: 1, source: 'djev' }).events.filter((e) => e.type === 'pickup_spawned');
+    assert.equal(spawned.length, 3);
+    for (const p of spawned) {
       const d = Math.hypot(p.x - game.player.x, p.y - game.player.y);
       assert.ok(d <= core.PICKUP.spawn_near_px.max + 1, `within reach (${d.toFixed(0)} px)`);
       assert.ok(p.y >= core.PICKUP.y_min && p.y <= core.PICKUP.y_max, 'inside the band');
@@ -1900,4 +1903,42 @@ test('homing missiles take enemy missiles first, intercept them, and retarget to
   game.enemyMissiles = [{ id: 'late', x: 300, y: 350, heading: Math.PI * 0.4, age_s: 0 }];
   const retarget = core.stepGame(game, { ...shoot, fire: 'cease' }).events.find((e) => e.type === 'missile_retarget');
   assert.equal(retarget && retarget.target_id, 'late');
+});
+
+test('v15: shields absorb hits up to four, a stage brings reinforcements, a mission pays out, and the strike sweeps the field', () => {
+  const { core } = loadModules();
+  const game = quietGame(core, { x: 480, y: 500 });
+  // Shields: each absorbs one hit without losing a life, capped at four.
+  game.pickupClock_s = { shield: 99 };
+  for (let i = 0; i < 5; i += 1) {
+    game.pickups = [{ id: `s${i}`, kind: 'shield', x: 480, y: 500, vx: 0, vy: 0, age_s: 0, hue: 0 }];
+    core.stepGame(game, null);
+  }
+  assert.equal(game.shields, core.SHIELD.max);
+  game.enemyBullets = [bullet({ id: 'b1', x: 480, y: 500, vy: 10 })];
+  const absorbed = core.stepGame(game, null).events.find((e) => e.type === 'shield_absorbed');
+  assert.ok(absorbed && game.shields === 3 && game.player.lives === 3, 'a shield takes the hit');
+  // Stage: a cleared formation is replaced after the delay, the wave does not advance.
+  game.player.invincible_s = 0;
+  game.waveActive = true;
+  game.waveClock_s = 10;
+  game.enemies = [];
+  game.reinforceClock_s = null;
+  let reinforced = false;
+  for (let t = 0; t < 200 && !reinforced; t += 1) reinforced = core.stepGame(game, null).events.some((e) => e.type === 'reinforcements');
+  assert.ok(reinforced && game.wave === 1 && game.enemies.length > 0);
+  // Mission: an intercept target counts from the stage start and pays a bomb charge and score once reached.
+  game.mission = { wave: 1, kind: 'intercept', target: 2, base: game.counters.bulletsIntercepted + game.counters.enemyMissilesDestroyed, progress: 0, status: 'active', text: 'Intercept 2 enemy shots' };
+  const charges = game.bomb.charges;
+  game.counters.bulletsIntercepted += 2;
+  const done = core.stepGame(game, null).events.find((e) => e.type === 'mission_complete');
+  assert.ok(done && game.mission.status === 'done' && game.bomb.charges === Math.min(core.BOMB.max_charges, charges + 1));
+  // Strike: one call sweeps every bullet and ship off the field; a second call in the same block is refused.
+  game.enemyBullets = [bullet({ id: 'top', x: 300, y: 40, vy: 0 }), bullet({ id: 'low', x: 700, y: 560, vy: 0 })];
+  const call = { movement: 'hold', fire: 'cease', decision_id: 'a1', sequence: 2, source: 'djev', assist: 'call' };
+  assert.ok(core.stepGame(game, call).events.some((e) => e.type === 'assist_called'));
+  let finished = false;
+  for (let t = 0; t < 120 && !finished; t += 1) finished = core.stepGame(game, null).events.some((e) => e.type === 'assist_finished');
+  assert.ok(finished && game.enemyBullets.every((b) => b.id !== 'top' && b.id !== 'low'));
+  assert.ok(core.stepGame(game, { ...call, decision_id: 'a2' }).events.some((e) => e.type === 'assist_unavailable'));
 });

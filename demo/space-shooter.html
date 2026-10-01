@@ -473,7 +473,7 @@
   (() => {
     "use strict";
 
-    const ENGINE_VERSION = "space-decision-core-v14";
+    const ENGINE_VERSION = "space-decision-core-v15";
     const DT_MS = 1000 / 60;
     const DT_SECONDS = 1 / 60;
     const WIDTH = 960;
@@ -533,7 +533,7 @@
     // Kinds: bomb (+1 bomb charge), weapon (+1 weapon level), wingman (+1 escort jet), missile ("M": +1 missile cap).
     const PICKUP = Object.freeze({ box:{ w:24, h:24 }, lifetime_s:14, fade_s:2, speed:55, y_min:260, y_max:560,
       magnet_radius_px:110, magnet_min_speed_px_s:180, magnet_speed_px_s:280, magnet_accel_px_s2:900, magnet_reach_s:.6, magnet_forecast_margin_px:4,
-      spawn_interval_s:{ bomb:11, weapon:17, wingman:16, missile:15 }, first_spawn_s:{ bomb:6, weapon:9, wingman:14, missile:12 },
+      spawn_interval_s:{ bomb:11, weapon:17, wingman:16, missile:15, shield:42 }, first_spawn_s:{ bomb:6, weapon:9, wingman:14, missile:12, shield:28 },
       // Pickups appear at a seeded random spot near the ship: spawn_near_px from it, then kept inside the drift band.
       spawn_near_px:{ min:140, max:260 } });
     const PICKUP_KINDS = Object.freeze(Object.keys(PICKUP.spawn_interval_s));
@@ -546,12 +546,29 @@
     const WINGMAN = Object.freeze({ max:8, radius:40, slot_angles_deg:[180, 0, 225, 315, 135, 45, 270, 90], shot_speed:520, missile_slots:2, orbit_rad_s:1.6,
       fire_interval_s:.17 });
     // A boss appears at random times, parks near the top, and saturates the arena with bullet rings, aimed fans, and homing missiles.
+    // v15: denser rings and fans, plus big bombs: slow, large shells that can be shot down (hp) and burst into a ring of
+    // bullets after fuse_s or when they reach the ship's height.
     const BOSS = Object.freeze({ hp:45, w:96, h:58, score:500, station_y:95, speed:70, first_s:[40, 60], interval_s:[35, 55], bomb_damage:20,
-      ring:{ count:14, interval_s:2.4, speed:150 }, fan:{ count:7, spread_rad:1, interval_s:1.8, speed:190 }, missiles:{ count:2, interval_s:4.5 } });
+      ring:{ count:22, interval_s:1.7, speed:150 }, fan:{ count:11, spread_rad:1.2, interval_s:1.3, speed:190 }, missiles:{ count:2, interval_s:4.5 },
+      big_bomb:{ interval_s:3.2, speed:120, box:26, hp:3, fuse_s:1.6, burst:16, burst_speed:170, score:40 } });
     const ENEMY_MISSILE = Object.freeze({ speed:190, turn_rate:1.4, lifetime_s:5, box:{ w:10, h:10 } });
     // Clearing every fifth wave (so waves 6, 11, 16, ... start with it) grants one extra life, up to EXTRA_LIFE.max_lives.
     const EXTRA_LIFE = Object.freeze({ every_waves:5, max_lives:5 });
+    // v15 shields: a rare pickup; each shield absorbs one hit (no life or escort jet lost), up to max stacked.
+    const SHIELD = Object.freeze({ max:4, absorb_invulnerability_s:.6 });
+    // v15 assistance strike: one call per block of every_waves waves (waves 1-10, 11-20, ...; an unused call does not
+    // carry over). A sweep line rises from the bottom of the arena to the top at speed_px_s and destroys every enemy
+    // bullet, missile, big bomb and ship it passes, the boss included. wild_bullets is the bullet count the bridge
+    // treats as a wild field (the trigger for asking the assist question).
+    const ASSIST = Object.freeze({ every_waves:10, speed_px_s:900, wild_bullets:60 });
+    // v15 stages: every wave is a timed stage. A cleared formation is replaced by reinforcements after reinforce_delay_s
+    // until the stage ends; then ships still on screen withdraw (the boss stays) and the next wave starts.
+    const STAGE = Object.freeze({ duration_s:180, reinforce_delay_s:2.5 });
+    // v15 missions: one random objective per stage; completing it pays reward_score and one bomb charge.
+    const MISSION = Object.freeze({ kinds:["destroy", "collect", "flawless", "boss", "intercept", "no_bomb"], reward_score:1500,
+      collect_target:3, intercept_target:60, destroy_factor:1.5 });
     const BOMB_IDS = Object.freeze(["hold","detonate"]);
+    const ASSIST_IDS = Object.freeze(["hold","call"]);
     const RULES = Object.freeze({
       arena:{ width:WIDTH, height:HEIGHT },
       dt_ms:DT_MS,
@@ -693,7 +710,19 @@
       }
       game.profile = waveProfile(game.wave);
       const count = enemyCountForWave(game.wave, game.profile, game.difficulty);
-      game.enemies = Array.from({ length: count }, (_, index) => createEnemy(game, game.profile.enemyType, index, count));
+      // A boss outlives the stage; formation ships still on screen withdraw.
+      const bosses = game.enemies.filter((enemy) => enemy.type === "boss");
+      game.enemies = bosses.concat(Array.from({ length: count }, (_, index) => createEnemy(game, game.profile.enemyType, index, count)));
+      game.reinforceClock_s = null;
+      if (game.assist) {
+        const block = Math.floor((game.wave - 1) / ASSIST.every_waves);
+        if (block !== game.assist.block) {
+          game.assist.block = block;
+          game.assist.charges = 1;
+          events.push({ type:"assist_granted", tick:game.tick, wave:game.wave });
+        }
+      }
+      assignMission(game, events);
       // Shots already in flight finish their paths; clearing them at a wave change looked like cheating.
       game.enemyFireClock_s = Math.min(.8, fireIntervalForDifficulty(game.difficulty));
       game.waveClock_s = 0;
@@ -724,6 +753,11 @@
         missileClock_s: 0,
         missileBonus: 0,
         bomb: { charges:BOMB.charges, last_decision_id:null },
+        shields: 0,
+        assist: { charges:1, block:0, last_decision_id:null, sweep_y:null },
+        bossBombs: [],
+        mission: null,
+        reinforceClock_s: null,
         weaponLevel: 0,
         wingmen: 0,
         wingPhase: 0,
@@ -776,6 +810,15 @@
           splashKills: 0,
           splashBulletsCleared: 0,
           extraLives: 0,
+          shieldPickups: 0,
+          shieldsAbsorbed: 0,
+          assistsCalled: 0,
+          assistKills: 0,
+          bossBombsFired: 0,
+          bossBombsDestroyed: 0,
+          reinforcements: 0,
+          missionsCompleted: 0,
+          missionsFailed: 0,
         },
       };
       startWave(game);
@@ -798,7 +841,8 @@
         return { id:e.id, kind:"enemy", x:e.x, y:e.y, vx:v.vx, vy:v.vy, w:e.w, h:e.h };
       });
       const missiles = (game.enemyMissiles || []).map((m) => ({ id:m.id, kind:"missile", x:m.x, y:m.y, vx:Math.cos(m.heading) * ENEMY_MISSILE.speed, vy:Math.sin(m.heading) * ENEMY_MISSILE.speed, w:ENEMY_MISSILE.box.w, h:ENEMY_MISSILE.box.h }));
-      return bullets.concat(missiles, enemies);
+      const shells = (game.bossBombs || []).map((b) => ({ id:b.id, kind:"bullet", x:b.x, y:b.y, vx:b.vx, vy:b.vy, w:BOSS.big_bomb.box, h:BOSS.big_bomb.box }));
+      return bullets.concat(shells, missiles, enemies);
     }
 
     function overlaps(a, b) {
@@ -1176,6 +1220,7 @@
       return game.pickups.filter((pickup) => pickup.kind === "bomb" ? game.bomb.charges < BOMB.max_charges
         : pickup.kind === "wingman" ? game.wingmen < WINGMAN.max
         : pickup.kind === "missile" ? bonusMissileCap(game) < MISSILE.max_active_top && (game.missileBonus || 0) < MISSILE.pickup_bonus_max
+        : pickup.kind === "shield" ? (game.shields || 0) < SHIELD.max
         : game.weaponLevel < WEAPON.max_level);
     }
 
@@ -1392,6 +1437,16 @@
           sacrifice_jets: game.wingmen,
         },
         missiles_active: game.playerMissiles.length,
+        shields: game.shields || 0,
+        assist: game.assist ? {
+          charges: game.assist.charges,
+          sweeping: game.assist.sweep_y !== null,
+          bullets_on_screen: game.enemyBullets.length + (game.bossBombs || []).length,
+          wild_bullets: ASSIST.wild_bullets,
+          block_end_wave: (game.assist.block + 1) * ASSIST.every_waves,
+        } : null,
+        mission: game.mission ? { text:game.mission.text, progress:game.mission.progress, target:game.mission.target, status:game.mission.status } : null,
+        stage_remaining_s: rounded(Math.max(0, STAGE.duration_s - game.waveClock_s)),
         weapon_level: game.weaponLevel,
         wingmen: game.wingmen,
         pickups: game.pickups.map((pickup) => ({ kind:pickup.kind, x:rounded(pickup.x), y:rounded(pickup.y) })),
@@ -1566,7 +1621,7 @@
 
     function applyPickup(game, pickup, events) {
       const read = () => pickup.kind === "bomb" ? game.bomb.charges : pickup.kind === "wingman" ? game.wingmen
-        : pickup.kind === "missile" ? bonusMissileCap(game) : game.weaponLevel;
+        : pickup.kind === "missile" ? bonusMissileCap(game) : pickup.kind === "shield" ? game.shields || 0 : game.weaponLevel;
       const before = read();
       if (pickup.kind === "bomb") {
         game.bomb.charges = Math.min(BOMB.max_charges, game.bomb.charges + 1);
@@ -1577,6 +1632,9 @@
       } else if (pickup.kind === "missile") {
         game.missileBonus = Math.min(MISSILE.pickup_bonus_max, (game.missileBonus || 0) + 1);
         game.counters.missilePickups = (game.counters.missilePickups || 0) + 1;
+      } else if (pickup.kind === "shield") {
+        game.shields = Math.min(SHIELD.max, (game.shields || 0) + 1);
+        game.counters.shieldPickups = (game.counters.shieldPickups || 0) + 1;
       } else {
         game.weaponLevel = Math.min(WEAPON.max_level, game.weaponLevel + 1);
         game.counters.weaponPickups += 1;
@@ -1844,6 +1902,7 @@
       game.enemyBullets = game.enemyBullets.filter((bullet) => !inRange(bullet));
       const removedMissiles = game.enemyMissiles.filter(inRange).map((missile) => missile.id);
       game.enemyMissiles = game.enemyMissiles.filter((missile) => !inRange(missile));
+      game.bossBombs = (game.bossBombs || []).filter((shell) => !inRange(shell));
       game.counters.enemyMissilesDestroyed += removedMissiles.length;
       const destroyedEnemies = [];
       for (let i = game.enemies.length - 1; i >= 0; i -= 1) {
@@ -1908,6 +1967,16 @@
         for (let i = 0; i < BOSS.fan.count; i += 1) bossBullet(game, boss, aim + (i / (BOSS.fan.count - 1) - .5) * BOSS.fan.spread_rad, BOSS.fan.speed, events);
         boss.fan_s = BOSS.fan.interval_s;
       }
+      boss.big_bomb_s = (boss.big_bomb_s ?? BOSS.big_bomb.interval_s / 2) - DT_SECONDS;
+      if (boss.big_bomb_s <= 0) {
+        const aim = Math.atan2(game.player.y - boss.y, game.player.x - boss.x);
+        const shell = { id:entityId(game, "bigbomb"), x:boss.x, y:boss.y + boss.h / 2, vx:Math.cos(aim) * BOSS.big_bomb.speed, vy:Math.sin(aim) * BOSS.big_bomb.speed,
+          age_s:0, hp:BOSS.big_bomb.hp, from_enemy_id:boss.id };
+        game.bossBombs = (game.bossBombs || []).concat(shell);
+        game.counters.bossBombsFired = (game.counters.bossBombsFired || 0) + 1;
+        events.push({ type:"boss_bomb_launched", tick:game.tick, bomb_id:shell.id, x:shell.x, y:shell.y });
+        boss.big_bomb_s = BOSS.big_bomb.interval_s;
+      }
       if (boss.missile_s <= 0) {
         for (let i = 0; i < BOSS.missiles.count; i += 1) {
           const missile = { id:entityId(game, "emissile"), x:boss.x + (i - (BOSS.missiles.count - 1) / 2) * 40, y:boss.y + boss.h / 2, heading:Math.PI / 2 + (i - (BOSS.missiles.count - 1) / 2) * .9, age_s:0, from_enemy_id:boss.id };
@@ -1962,11 +2031,151 @@
       }
     }
 
+    // Big bombs drift toward where the ship was, burst into a ring of bullets after the fuse or at the ship's height,
+    // hit the ship on contact, and break after BOSS.big_bomb.hp player hits.
+    function updateBossBombs(game, command, events) {
+      if (!game.bossBombs || !game.bossBombs.length) return;
+      const box = BOSS.big_bomb.box;
+      const kept = [];
+      for (const shell of game.bossBombs) {
+        shell.age_s += DT_SECONDS;
+        shell.x += shell.vx * DT_SECONDS;
+        shell.y += shell.vy * DT_SECONDS;
+        if (overlaps({ x:shell.x, y:shell.y, w:box, h:box }, game.player)) {
+          hitPlayer(game, { kind:"bullet", id:shell.id, x:shell.x, y:shell.y, vx:shell.vx, vy:shell.vy, w:box, h:box }, command, events);
+          continue;
+        }
+        for (let i = game.playerBullets.length - 1; i >= 0 && shell.hp > 0; i -= 1) {
+          const shot = game.playerBullets[i];
+          if (overlaps({ x:shot.x, y:shot.y, w:PLAYER_SHOT_BOX.w, h:PLAYER_SHOT_BOX.h }, { x:shell.x, y:shell.y, w:box, h:box })) {
+            game.playerBullets.splice(i, 1);
+            shell.hp -= 1;
+          }
+        }
+        if (shell.hp <= 0) {
+          game.counters.bossBombsDestroyed = (game.counters.bossBombsDestroyed || 0) + 1;
+          game.score += BOSS.big_bomb.score;
+          events.push({ type:"boss_bomb_destroyed", tick:game.tick, bomb_id:shell.id, x:shell.x, y:shell.y });
+          continue;
+        }
+        if (shell.age_s >= BOSS.big_bomb.fuse_s || shell.y >= game.player.y - 30) {
+          const origin = { id:shell.from_enemy_id, x:shell.x, y:shell.y, h:0 };
+          for (let i = 0; i < BOSS.big_bomb.burst; i += 1) bossBullet(game, origin, shell.age_s + i * Math.PI * 2 / BOSS.big_bomb.burst, BOSS.big_bomb.burst_speed, events);
+          events.push({ type:"boss_bomb_burst", tick:game.tick, bomb_id:shell.id, x:shell.x, y:shell.y });
+          continue;
+        }
+        if (shell.x > -40 && shell.x < WIDTH + 40 && shell.y > -40 && shell.y < HEIGHT + 40) kept.push(shell);
+      }
+      game.bossBombs = kept;
+    }
+
+    // The assistance strike: a call starts a sweep line at the bottom of the arena that rises to the top, destroying
+    // every enemy bullet, missile, big bomb and ship it passes (the boss included).
+    function callAssist(game, command, events) {
+      if (!game.assist || !command || command.assist !== "call" || !command.decision_id || game.assist.last_decision_id === command.decision_id) return;
+      game.assist.last_decision_id = command.decision_id;
+      if (game.assist.charges <= 0 || game.assist.sweep_y !== null) {
+        events.push({ type:"assist_unavailable", tick:game.tick, decision_id:command.decision_id });
+        return;
+      }
+      game.assist.charges -= 1;
+      game.assist.sweep_y = HEIGHT + 10;
+      game.counters.assistsCalled = (game.counters.assistsCalled || 0) + 1;
+      events.push({ type:"assist_called", tick:game.tick, decision_id:command.decision_id, wave:game.wave, bullets:game.enemyBullets.length });
+    }
+
+    function updateAssistSweep(game, events) {
+      if (!game.assist || game.assist.sweep_y === null) return;
+      game.assist.sweep_y -= ASSIST.speed_px_s * DT_SECONDS;
+      const line = game.assist.sweep_y;
+      const passed = (thing) => thing.y >= line;
+      game.enemyBullets = game.enemyBullets.filter((bullet) => !passed(bullet));
+      const missiles = game.enemyMissiles.filter(passed).length;
+      game.enemyMissiles = game.enemyMissiles.filter((missile) => !passed(missile));
+      game.counters.enemyMissilesDestroyed += missiles;
+      game.bossBombs = (game.bossBombs || []).filter((shell) => !passed(shell));
+      for (let i = game.enemies.length - 1; i >= 0; i -= 1) {
+        if (game.enemies[i].y + game.enemies[i].h / 2 < line) continue;
+        game.counters.assistKills = (game.counters.assistKills || 0) + 1;
+        destroyEnemyAt(game, i, events, "assist");
+      }
+      if (line < -40) {
+        game.assist.sweep_y = null;
+        events.push({ type:"assist_finished", tick:game.tick });
+      }
+    }
+
+    // ---- v15 missions: one random objective per stage, measured from counters at the stage start ----
+    const MISSION_TEXT = {
+      destroy: (t) => `Destroy ${t} enemy ships`,
+      collect: (t) => `Collect ${t} supplies`,
+      flawless: () => "Lose no life this stage",
+      boss: () => "Destroy the boss",
+      intercept: (t) => `Intercept ${t} enemy shots`,
+      no_bomb: () => "Win the stage without a bomb",
+    };
+
+    function missionCounters(game) {
+      const c = game.counters;
+      return {
+        destroy: c.enemiesDestroyed,
+        collect: c.bombPickups + c.weaponPickups + c.wingmanPickups + (c.missilePickups || 0) + (c.shieldPickups || 0),
+        flawless: c.hitsTaken,
+        boss: c.bossesDestroyed,
+        intercept: c.bulletsIntercepted + c.enemyMissilesDestroyed,
+        no_bomb: c.bombsUsed,
+      };
+    }
+
+    function assignMission(game, events) {
+      const kinds = MISSION.kinds.filter((kind) => kind !== "boss" || game.boss.active_id !== null || (game.boss.clock_s ?? 99) < STAGE.duration_s - 60);
+      const kind = kinds[Math.floor(random01(game) * kinds.length) % kinds.length];
+      const target = kind === "destroy" ? Math.round(enemyCountForWave(game.wave, game.profile, game.difficulty) * MISSION.destroy_factor)
+        : kind === "collect" ? MISSION.collect_target : kind === "intercept" ? MISSION.intercept_target : 1;
+      game.mission = { wave:game.wave, kind, target, base:missionCounters(game)[kind], progress:0, status:"active", text:MISSION_TEXT[kind](target) };
+      events.push({ type:"mission_assigned", tick:game.tick, wave:game.wave, kind, target, text:game.mission.text });
+    }
+
+    function settleMission(game, status, events) {
+      const mission = game.mission;
+      mission.status = status;
+      if (status === "done") {
+        game.score += MISSION.reward_score;
+        game.bomb.charges = Math.min(BOMB.max_charges, game.bomb.charges + 1);
+        game.counters.missionsCompleted = (game.counters.missionsCompleted || 0) + 1;
+      } else {
+        game.counters.missionsFailed = (game.counters.missionsFailed || 0) + 1;
+      }
+      events.push({ type:status === "done" ? "mission_complete" : "mission_failed", tick:game.tick, wave:mission.wave, kind:mission.kind, text:mission.text, score:game.score });
+    }
+
+    function updateMission(game, events, stageOver = false) {
+      const mission = game.mission;
+      if (!mission || mission.status !== "active") return;
+      const delta = missionCounters(game)[mission.kind] - mission.base;
+      if (mission.kind === "flawless" || mission.kind === "no_bomb") {
+        mission.progress = delta;
+        if (delta > 0) settleMission(game, "failed", events);
+        else if (stageOver) settleMission(game, "done", events);
+        return;
+      }
+      mission.progress = Math.min(delta, mission.target);
+      if (delta >= mission.target) settleMission(game, "done", events);
+      else if (stageOver) settleMission(game, "failed", events);
+    }
+
     function hitPlayer(game, source, command, events) {
       const before = game.player.lives;
       if (game.player.invincible_s > 0) {
         game.counters.invulnerabilityContacts += 1;
         events.push({ type:"invulnerability_contact", tick:game.tick, lives:before, source, active_decision_id:command && command.decision_id });
+        return;
+      }
+      if ((game.shields || 0) > 0) {
+        game.shields -= 1;
+        game.player.invincible_s = SHIELD.absorb_invulnerability_s;
+        game.counters.shieldsAbsorbed = (game.counters.shieldsAbsorbed || 0) + 1;
+        events.push({ type:"shield_absorbed", tick:game.tick, shields:game.shields, source, player:{ x:game.player.x, y:game.player.y } });
         return;
       }
       game.player.lives -= 1;
@@ -1993,6 +2202,7 @@
       const movement = command ? command.movement : "hold";
       const fire = command ? command.fire : "cease";
       detonateBomb(game, command, events);
+      callAssist(game, command, events);
       const arena = arenaFor(game);
       const beforePlayer = { x:game.player.x, y:game.player.y };
       const moved = movePoint(beforePlayer, movement, arena);
@@ -2058,16 +2268,35 @@
       resolveMissileHits(game, events);
 
       updateBoss(game, events);
+      updateBossBombs(game, command, events);
+      updateAssistSweep(game, events);
       game.enemyFireClock_s -= DT_SECONDS;
       if (game.enemyFireClock_s <= 0 && game.enemies.length) {
         enemyShoot(game, events);
         game.enemyFireClock_s = fireIntervalForDifficulty(game.difficulty);
       }
       game.waveClock_s += DT_SECONDS;
-      if (!game.enemies.length && game.waveActive && !game.terminal) {
-        game.waveActive = false;
-        game.wave += 1;
-        startWave(game, events);
+      if (game.waveActive && !game.terminal) {
+        updateMission(game, events);
+        if (game.waveClock_s >= STAGE.duration_s) {
+          // The stage is over: settle the mission, then the next wave.
+          updateMission(game, events, true);
+          events.push({ type:"stage_ended", tick:game.tick, wave:game.wave, withdrawn:game.enemies.filter((enemy) => enemy.type !== "boss").length });
+          game.waveActive = false;
+          game.wave += 1;
+          startWave(game, events);
+        } else if (!game.enemies.some((enemy) => enemy.type !== "boss")) {
+          // Formation cleared early: reinforcements of the same wave arrive after a short delay.
+          if (game.reinforceClock_s === null || game.reinforceClock_s === undefined) game.reinforceClock_s = STAGE.reinforce_delay_s;
+          game.reinforceClock_s -= DT_SECONDS;
+          if (game.reinforceClock_s <= 0) {
+            const count = enemyCountForWave(game.wave, game.profile, game.difficulty);
+            game.enemies = game.enemies.concat(Array.from({ length: count }, (_, index) => createEnemy(game, game.profile.enemyType, index, count)));
+            game.reinforceClock_s = null;
+            game.counters.reinforcements = (game.counters.reinforcements || 0) + 1;
+            events.push({ type:"reinforcements", tick:game.tick, wave:game.wave, count });
+          }
+        }
       }
       game.tick += 1;
       game.sim_ms = game.tick * DT_MS;
@@ -2254,6 +2483,11 @@
         missileClock_s: game.missileClock_s,
         missileBonus: game.missileBonus || 0,
         bomb: game.bomb,
+        shields: game.shields || 0,
+        assist: game.assist || null,
+        bossBombs: game.bossBombs || [],
+        mission: game.mission || null,
+        reinforceClock_s: game.reinforceClock_s ?? null,
         weaponLevel: game.weaponLevel,
         wingmen: game.wingmen,
         wingPhase: game.wingPhase,
@@ -2321,9 +2555,9 @@
     }
 
     globalThis.SpaceDecisionCore = Object.freeze({
-      ENGINE_VERSION, DT_MS, ACTION_IDS, FIRE_IDS, BOMB_IDS, MISSILE, BOMB, WEAPON, PICKUP, PICKUP_KINDS, EXTRA_LIFE, WINGMAN, BOSS, ENEMY_MISSILE, LEASE_TICKS, LEASE_MS, RULES, DEFAULT_DIFFICULTY, HARDEST_DIFFICULTY, LEGACY_MAX_DIFFICULTY, MAX_DIFFICULTY,
+      ENGINE_VERSION, DT_MS, ACTION_IDS, FIRE_IDS, BOMB_IDS, ASSIST_IDS, MISSILE, BOMB, WEAPON, PICKUP, PICKUP_KINDS, EXTRA_LIFE, WINGMAN, BOSS, ENEMY_MISSILE, LEASE_TICKS, LEASE_MS, RULES, DEFAULT_DIFFICULTY, HARDEST_DIFFICULTY, LEGACY_MAX_DIFFICULTY, MAX_DIFFICULTY,
       createGame, stepGame, coordinateAction, stepPolicyTick, observeGame, serializeGame, restoreGame, hashGame, gameStatus,
-      sampledFuturesForecast, sampledFutureSample, mergeSampledFutures, SAMPLED_FUTURES, normalizeDifficulty, arenaFor, velocityFor, waveProfile, baseEnemyCountForWave, enemyCountForWave,
+      sampledFuturesForecast, sampledFutureSample, mergeSampledFutures, SAMPLED_FUTURES, SHIELD, ASSIST, STAGE, MISSION, normalizeDifficulty, arenaFor, velocityFor, waveProfile, baseEnemyCountForWave, enemyCountForWave,
       fireIntervalForDifficulty, bulletSpeedForDifficulty, rulesManifest, missileCap, bonusMissileCap,
       _private: Object.freeze({ sweptContact, segmentClearance, hostileThreats, stableStringify, rankRouteOptions }),
     });
@@ -2342,6 +2576,7 @@
     const ACTION_IDS = globalThis.SpaceDecisionCore.ACTION_IDS;
     const FIRE_IDS = globalThis.SpaceDecisionCore.FIRE_IDS;
     const BOMB_IDS = globalThis.SpaceDecisionCore.BOMB_IDS;
+    const ASSIST_IDS = globalThis.SpaceDecisionCore.ASSIST_IDS;
     const LEASE_TICKS = globalThis.SpaceDecisionCore.LEASE_TICKS;
     const DT_MS = globalThis.SpaceDecisionCore.DT_MS;
     const INTENT_IDS = Object.freeze(["evade", "recover", "position"]);
@@ -2462,6 +2697,7 @@
       // Intent is optional: it is no longer asked because it never steered the game.
       if (reply.intent != null && !INTENT_IDS.includes(reply.intent)) return { ok:false, reason:"unknown_intent", age_ms:age, current:true };
       if (reply.bomb != null && !BOMB_IDS.includes(reply.bomb)) return { ok:false, reason:"unknown_bomb", age_ms:age, current:true };
+      if (reply.assist != null && !ASSIST_IDS.includes(reply.assist)) return { ok:false, reason:"unknown_assist", age_ms:age, current:true };
       return { ok:true, age_ms:age, tick };
     }
 
@@ -2483,6 +2719,8 @@
         lease: reply.lease,
         intent: reply.intent ?? null,
         bomb: reply.bomb ?? "hold",
+        // v15: asked only when the bullet field is wild and a strike is available; otherwise hold.
+        assist: reply.assist ?? "hold",
         sent_wall_ms: pending.wall_ms,
         received_wall_ms: wall_ms,
         confidence: reply.confidence || {},
@@ -2539,6 +2777,7 @@
             lease: decision.lease,
             intent: decision.intent,
             bomb: decision.bomb,
+            assist: decision.assist,
             confidence: { ...decision.confidence },
             start_tick: tick,
             end_tick: tick + ticks,

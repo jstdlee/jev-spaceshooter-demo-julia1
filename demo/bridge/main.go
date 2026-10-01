@@ -102,10 +102,11 @@ func readJSON(r *http.Request) (any, error) {
 
 func (s *Server) Handler() http.Handler {
 	routes := map[string]func(*http.Request, any) (map[string]any, error){
-		"/api/run/start": func(_ *http.Request, body any) (map[string]any, error) { return s.StartRun(body) },
-		"/api/decision":  func(r *http.Request, body any) (map[string]any, error) { return s.HandleDecision(r.Context(), body) },
-		"/api/run/event": func(_ *http.Request, body any) (map[string]any, error) { return s.RecordRunEvents(body) },
-		"/api/run/end":   func(_ *http.Request, body any) (map[string]any, error) { return s.EndRun(body) },
+		"/api/run/start":   func(_ *http.Request, body any) (map[string]any, error) { return s.StartRun(body) },
+		"/api/decision":    func(r *http.Request, body any) (map[string]any, error) { return s.HandleDecision(r.Context(), body) },
+		"/api/run/event":   func(_ *http.Request, body any) (map[string]any, error) { return s.RecordRunEvents(body) },
+		"/api/run/end":     func(_ *http.Request, body any) (map[string]any, error) { return s.EndRun(body) },
+		"/api/leaderboard": func(_ *http.Request, body any) (map[string]any, error) { return s.SubmitLeaderboard(body) },
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
@@ -126,6 +127,13 @@ func (s *Server) Handler() http.Handler {
 				w.Header().Set("Cache-Control", "no-store")
 				w.Header().Set("Access-Control-Allow-Origin", "*")
 				w.Write(page)
+			case "/api/leaderboard":
+				board, err := s.Leaderboard()
+				if err != nil {
+					writeError(w, err)
+					return
+				}
+				writeJSON(w, http.StatusOK, board)
 			case "/api/provider":
 				s.serveProvider(w)
 			case "/api/exchange":

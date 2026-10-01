@@ -23,7 +23,8 @@ var (
 	FireIDs     = []string{"shoot", "cease"}
 	IntentIDs   = []string{"evade", "recover", "position"}
 	BombIDs     = []string{"hold", "detonate"}
-	PickupKinds = []string{"bomb", "weapon", "wingman", "missile"}
+	PickupKinds = []string{"bomb", "weapon", "wingman", "missile", "shield"}
+	AssistIDs   = []string{"hold", "call"}
 	PathIDs     = func() []string {
 		ids := make([]string, len(ActionIDs))
 		for i, movement := range ActionIDs {
@@ -62,16 +63,15 @@ const (
 	// without closing in by zoneProgressPx becomes OK, so the ship returns when it safely can.
 	zoneMinX, zoneMaxX = 120.0, 840.0
 	zoneMinY, zoneMaxY = 77.5, 542.5
-	// v2 station: when the game sends sampled futures, the preferred place is a low band away from the side walls.
-	// Low buys reaction time against shots from above; the side walls halve the escape directions. Measured with
-	// the lab's Monte-Carlo policy at the doubled ceiling (docs/v2).
-	stationMinX, stationMaxX = 200.0, 760.0
-	stationMinY, stationMaxY = 430.0, 620.0
-	stationCenterX, stationCenterY = 480.0, 530.0
-	zoneProgressPx     = 10
-	pathInstructions   = "Pick the move that keeps the ship alive. Each move starts with its tier number: 1 is best, 6 is worst. Always pick a move with the lowest tier number present. Within that tier prefer more escapes, then keeps course, then not near enemy, then open space, then toward center. If every move is tier 6, pick the one hit latest."
-	fireInstructions   = "Choose shoot if enemy_count>0, otherwise cease. Shoot also launches homing missiles."
-	bombInstructions   = "Pick the choice with rank 1. Collect floating bomb pickups to refill charges."
+	// v2 position (engine v15): no rectangle. When the game sends sampled futures, the only position preference is to
+	// stay off the walls and out of the corners; the middle of the arena is flat. arenaWidth/Height match the engine.
+	arenaWidth, arenaHeight             = 960.0, 620.0
+	edgeSidePx, edgeTopPx, edgeBottomPx = 160.0, 200.0, 60.0
+	zoneProgressPx                      = 10
+	pathInstructions                    = "Pick the move that keeps the ship alive. Each move starts with its tier number: 1 is best, 6 is worst. Always pick a move with the lowest tier number present. Within that tier prefer more escapes, then keeps course, then not near enemy, then open space, then toward center. If every move is tier 6, pick the one hit latest."
+	fireInstructions                    = "Choose shoot if enemy_count>0, otherwise cease. Shoot also launches homing missiles."
+	bombInstructions                    = "Pick the choice with rank 1. Collect floating bomb pickups to refill charges."
+	assistInstructions                  = "Pick the choice with rank 1. The assistance strike sweeps the whole arena from bottom to top."
 	// bombUrgentTier is the best path tier at which the detonate label reports that no safe move exists.
 	bombUrgentTier    = 5
 	intentInstruction = "Classify current intent."
@@ -300,11 +300,11 @@ type PathRow struct {
 	EscapeGapPx     *float64
 	EnemyGapPx      *float64
 	Motion          string
-	PickupCollect   string  // wanted pickup this move's path touches, or ""
-	PickupToward    string  // wanted pickup this move closes in on, or ""
-	PickupWanted    bool    // any move collects or approaches a wanted pickup
-	ZoneStartOut    float64 // ship's distance outside the home zone now (0 inside)
-	ZoneEndOut      float64 // the move endpoint's distance outside the home zone (0 inside)
+	PickupCollect   string     // wanted pickup this move's path touches, or ""
+	PickupToward    string     // wanted pickup this move closes in on, or ""
+	PickupWanted    bool       // any move collects or approaches a wanted pickup
+	ZoneStartOut    float64    // ship's distance outside the home zone now (0 inside)
+	ZoneEndOut      float64    // the move endpoint's distance outside the home zone (0 inside)
 	Futures         *FutureRow // v2 sampled futures, when the game sends them
 }
 
@@ -313,11 +313,6 @@ type FutureRow struct {
 	Survival float64 // mean fraction of the forecast window survived, 0..1
 	Clear    int64   // futures survived to the end of the window
 	Futures  int64   // futures that were still alive when the command would land
-}
-
-// stationOutside is how far a point lies outside the v2 station band (0 inside).
-func stationOutside(x, y float64) float64 {
-	return math.Max(0, math.Max(stationMinX-x, x-stationMaxX)) + math.Max(0, math.Max(stationMinY-y, y-stationMaxY))
 }
 
 // zoneOutside is how far a point lies outside the home zone along x plus along y (0 inside).
@@ -414,9 +409,9 @@ func pathTable(value any, player *packedPlayer, currentMovement string) ([]PathR
 					fy = *y
 				}
 			}
-			zoneStart, zoneEnd = stationOutside(player.x, player.y), stationOutside(fx, fy)
+			// No zone in futures mode: no zone or centre words, only the edge preference (markPositionBehind).
+			zoneStart, zoneEnd, centerProgress = 0, 0, 0
 			endXFuture, endYFuture = fx, fy
-			centerProgress = math.Hypot(player.x-stationCenterX, player.y-stationCenterY) - math.Hypot(fx-stationCenterX, fy-stationCenterY)
 		}
 		rows = append(rows, PathRow{
 			Futures:         futures,
@@ -480,11 +475,14 @@ func futureRow(value any, name string) (*FutureRow, error) {
 	return &FutureRow{Survival: survival, Clear: clear, Futures: futures}, nil
 }
 
-// stationScore is the lab policy's position preference: away from the side walls (saturating at 200 px) and close
-// to the station's height. Higher is better.
-func stationScore(x, y float64) float64 {
-	side := math.Min(math.Min(x, 2*ArenaCenterX-x), 200) / 200
-	return side - math.Abs(y-stationCenterY)/(2*ArenaCenterY)
+// positionScore is the futures-mode position preference: distance from the side walls, the top (where the enemy
+// formation flies) and the bottom, each saturating, so the middle of the arena is flat and only walls and corners
+// cost. Higher is better.
+func positionScore(x, y float64) float64 {
+	side := math.Min(math.Min(x, arenaWidth-x), edgeSidePx) / edgeSidePx
+	top := math.Min(y, edgeTopPx) / edgeTopPx
+	bottom := math.Min(arenaHeight-y, edgeBottomPx) / edgeBottomPx
+	return side + top + bottom
 }
 
 // positionTolerance: safest moves within this much of the best station score stay in the top tier.
@@ -506,11 +504,11 @@ func markPositionBehind(rows []PathRow) {
 	top := math.Inf(-1)
 	for _, row := range rows {
 		if row.Futures.Survival >= best-1e-9 {
-			top = math.Max(top, stationScore(row.EndX, row.EndY))
+			top = math.Max(top, positionScore(row.EndX, row.EndY))
 		}
 	}
 	for i := range rows {
-		if rows[i].Futures.Survival >= best-1e-9 && stationScore(rows[i].EndX, rows[i].EndY) < top-positionTolerance {
+		if rows[i].Futures.Survival >= best-1e-9 && positionScore(rows[i].EndX, rows[i].EndY) < top-positionTolerance {
 			rows[i].PositionBehind = true
 		}
 	}
@@ -592,7 +590,7 @@ func pathTier(row PathRow) string {
 
 // isPowerUp reports whether a pickup kind upgrades firepower (everything but a bomb charge).
 func isPowerUp(kind string) bool {
-	return kind == "weapon" || kind == "wingman" || kind == "missile"
+	return kind == "weapon" || kind == "wingman" || kind == "missile" || kind == "shield"
 }
 
 // shiftTier moves among the safe tiers only: GOOD, OK, RISKY.
@@ -797,6 +795,59 @@ func buildBombCriteria(facts BombFacts, bestTier int) *OrderedMap {
 	return criteria
 }
 
+// AssistFacts is the validated state.assist observation (engine v15); nil when the game has no assistance strike.
+type AssistFacts struct {
+	Charges, Bullets, WildBullets, BlockEndWave int64
+	Sweeping                                    bool
+}
+
+func assistFacts(value any) (*AssistFacts, error) {
+	if value == nil {
+		return nil, nil
+	}
+	object, err := requireObject(value, "assist")
+	if err != nil {
+		return nil, err
+	}
+	var facts AssistFacts
+	for key, target := range map[string]*int64{"charges": &facts.Charges, "bullets_on_screen": &facts.Bullets, "wild_bullets": &facts.WildBullets, "block_end_wave": &facts.BlockEndWave} {
+		if *target, err = nonnegativeInt(object[key], "assist."+key); err != nil {
+			return nil, err
+		}
+	}
+	sweeping, ok := object["sweeping"].(bool)
+	if !ok {
+		return nil, validationError("assist.sweeping must be a boolean")
+	}
+	facts.Sweeping = sweeping
+	return &facts, nil
+}
+
+// buildAssistCriteria is the triggered assist question: it is asked only when a strike is available and the bullet
+// field is wild (at least wild_bullets on screen); otherwise it returns nil and the bridge holds without asking the
+// model. CALL NOW ranks first only when no move beats tier 5 and the bomb cannot help: no charge or jet left, or the
+// field is half again past wild.
+func buildAssistCriteria(facts *AssistFacts, bomb BombFacts, bestTier int) *OrderedMap {
+	if facts == nil || facts.Charges == 0 || facts.Sweeping || facts.Bullets < facts.WildBullets {
+		return nil
+	}
+	criteria := NewOrderedMap()
+	scarce := fmt.Sprintf("the only strike until wave %d", facts.BlockEndWave+1)
+	bombHelps := bomb.Charges+bomb.SacrificeJets > 0 && facts.Bullets < facts.WildBullets*3/2
+	if bestTier >= bombUrgentTier && !bombHelps {
+		criteria.Set("hold", fmt.Sprintf("Rank 2 WAIT: %d bullets on screen and every move is tier 5 or 6; the ship is likely hit.", facts.Bullets))
+		criteria.Set("call", fmt.Sprintf("Rank 1 CALL NOW: %d bullets on screen and every move is tier 5 or 6; the strike destroys everything on the field; %s.", facts.Bullets, scarce))
+		return criteria
+	}
+	reason := fmt.Sprintf("a tier %d move exists", bestTier)
+	if bombHelps && bestTier >= bombUrgentTier {
+		reason = "the bomb can clear the way"
+	}
+	criteria.Set("hold", fmt.Sprintf("Rank 1 SAVE: %s. Keeps the strike, %s.", reason, scarce))
+	criteria.Set("call", fmt.Sprintf("Rank 2 WASTE: %s; %d bullets on screen; %s.", reason, facts.Bullets, scarce))
+	return criteria
+}
+
 // ContextBudgetExceeded is returned (not raised to HTTP) as a null decision.
 type ContextBudgetExceeded struct{ Message string }
 
@@ -870,7 +921,7 @@ func choiceCriteria(ids []string, descriptions map[string]string) *OrderedMap {
 	return criteria
 }
 
-func buildUpstreamPayload(model, promptText string, packed, pathCriteria, bombCriteria *OrderedMap, flavor string) *OrderedMap {
+func buildUpstreamPayload(model, promptText string, packed, pathCriteria, bombCriteria, assistCriteria *OrderedMap, flavor string) *OrderedMap {
 	question := func(instructions string, criteria *OrderedMap) *OrderedMap {
 		return NewOrderedMap().Set("type", "choice").Set("instructions", instructions).Set("criteria", criteria)
 	}
@@ -888,6 +939,13 @@ func buildUpstreamPayload(model, promptText string, packed, pathCriteria, bombCr
 			Set("path", path).
 			Set("fire", question(fireInstructions, choiceCriteria(FireIDs, FireDescriptions))).
 			Set("bomb", bomb))
+	if assistCriteria != nil {
+		assist := question(assistInstructions, assistCriteria)
+		if flavor == "julia" {
+			assist.Set("option_questions", bombOptionQuestions())
+		}
+		payload.Get("questions").(*OrderedMap).Set("assist", assist)
+	}
 	if flavor != "laya" {
 		payload.Set("samples", 1).Set("steps", 1)
 	}
@@ -980,7 +1038,7 @@ func nullConfidence() map[string]any {
 
 // normalizeDecisionResponse validates the path, fire, and bomb answers atomically. Intent is no
 // longer asked (it never steered the game and cost latency); a stray intent answer must still be valid.
-func normalizeDecisionResponse(response any) map[string]any {
+func normalizeDecisionResponse(response any, assistAsked ...bool) map[string]any {
 	intent := extractAnswer(response, "intent", IntentIDs)
 	if intent.err == "missing_intent" {
 		intent = answer{}
@@ -988,15 +1046,20 @@ func normalizeDecisionResponse(response any) map[string]any {
 	path := extractAnswer(response, "path", PathIDs)
 	fire := extractAnswer(response, "fire", FireIDs)
 	bomb := extractAnswer(response, "bomb", BombIDs)
+	// The assist question is only asked when triggered; otherwise the strike holds.
+	assist := answer{choice: "hold"}
+	if len(assistAsked) > 0 && assistAsked[0] {
+		assist = extractAnswer(response, "assist", AssistIDs)
+	}
 	var errors []string
-	for _, item := range []answer{intent, path, fire, bomb} {
+	for _, item := range []answer{intent, path, fire, bomb, assist} {
 		if item.err != "" {
 			errors = append(errors, item.err)
 		}
 	}
 	if len(errors) > 0 {
 		return map[string]any{
-			"intent": nil, "movement": nil, "fire": nil, "lease": nil, "bomb": nil, "valid_choice": false,
+			"intent": nil, "movement": nil, "fire": nil, "lease": nil, "bomb": nil, "assist": nil, "valid_choice": false,
 			"confidence": nullConfidence(), "error": strings.Join(errors, ","),
 		}
 	}
@@ -1007,6 +1070,7 @@ func normalizeDecisionResponse(response any) map[string]any {
 		"fire":         fire.choice,
 		"lease":        path.choice[separator+2:],
 		"bomb":         bomb.choice,
+		"assist":       assist.choice,
 		"valid_choice": true,
 		"confidence": map[string]any{
 			"intent": intent.confidence, "path": path.confidence, "movement": path.confidence,
