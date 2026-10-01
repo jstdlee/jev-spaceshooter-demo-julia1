@@ -73,9 +73,10 @@ const POLICIES = {
     const prefix = control.active ? { movement: control.active.movement, fire: 'shoot', decision_id: 'p', sequence: 0 } : null;
     const run = (g, movement, ticks, id) => {
       const lives = g.player.lives;
+      const shields = g.shields || 0;
       for (let i = 0; i < ticks; i += 1) {
         core.stepPolicyTick(g, { movement, fire: 'shoot', decision_id: id, sequence: 0 });
-        if (g.player.lives < lives || g.terminal) return i;
+        if (g.player.lives < lives || (g.shields || 0) < shields || g.terminal) return i;
       }
       return ticks;
     };
@@ -145,9 +146,10 @@ function monteCarlo({ game, core, opts, control, latencyTicks }) {
   const prefixMove = control.active ? control.active.movement : 'hold';
   const run = (g, movement, ticks, id) => {
     const lives = g.player.lives;
+    const shields = g.shields || 0;
     for (let i = 0; i < ticks; i += 1) {
       core.stepPolicyTick(g, { movement, fire: 'shoot', decision_id: id, sequence: 0 });
-      if (g.player.lives < lives || g.terminal) return i;
+      if (g.player.lives < lives || (g.shields || 0) < shields || g.terminal) return i;
     }
     return ticks;
   };

@@ -1353,12 +1353,15 @@
     // per-move counts for that sample, or null when the ship is lost before any new command could land.
     function sampledFutureSample(game, sample, { hold_ticks = SAMPLED_FUTURES.hold_ticks, follow_ticks = SAMPLED_FUTURES.follow_ticks, prefix_movement = "hold", prefix_ticks = 0 } = {}) {
       const full = hold_ticks + follow_ticks;
+      // A hit is a hit whether a life or a shield pays for it: counting only lives made shielded moves into bullets
+      // look safe, and the model spent a fresh shield at once (v15 fix).
       const play = (g, movement, ticks) => {
         const lives = g.player.lives;
+        const shields = g.shields || 0;
         const command = { movement, fire:"shoot", decision_id:"forecast", sequence:0 };
         for (let i = 0; i < ticks; i += 1) {
           stepGame(g, command);
-          if (g.player.lives < lives || g.terminal) return i;
+          if (g.player.lives < lives || (g.shields || 0) < shields || g.terminal) return i;
         }
         return ticks;
       };
@@ -4341,6 +4344,58 @@
       lctx.globalAlpha = 1;
     }
 
+    // ---- v15 pickup badges ----
+    // Each pickup is a round badge (dark disc, kind-coloured ring, its icon) drawn on the full-resolution canvas so it
+    // floats smoothly: a slow sine bob with a fixed phase per pickup, a gentle sway, and a continuous fade.
+    const BADGE = { weapon:{ ring:"Y", icon:"capsules" }, bomb:{ ring:"O", icon:null }, missile:{ ring:"M", icon:"missile_kinetic" },
+      wingman:{ ring:"L", icon:"jet_5" }, shield:{ ring:"C", icon:"shield_pickup" } };
+
+    function badgeSurface(kind) {
+      const key = `badge:${kind}`;
+      if (spriteCache.has(key)) return spriteCache.get(key);
+      const spec = BADGE[kind] || BADGE.weapon;
+      const size = 17;
+      const [surface, context] = makeCanvas(size, size);
+      const c = (size - 1) / 2;
+      for (let y = 0; y < size; y += 1) for (let x = 0; x < size; x += 1) {
+        const d = Math.hypot(x - c, y - c);
+        if (d <= 6.6) { context.fillStyle = PALETTE.N; context.fillRect(x, y, 1, 1); }
+        else if (d <= 8.2) { context.fillStyle = PALETTE[spec.ring]; context.fillRect(x, y, 1, 1); }
+      }
+      // A highlight arc on the upper left reads as a polished badge.
+      context.fillStyle = PALETTE.W;
+      for (let a = 3.5; a < 4.6; a += .12) context.fillRect(Math.round(c + Math.cos(a) * 7.4), Math.round(c + Math.sin(a) * 7.4), 1, 1);
+      const icon = kind === "bomb" ? sprite("bomb", "O") : artSprite(spec.icon);
+      if (icon) {
+        const scale = Math.min(1, 11 / Math.max(icon.width, icon.height));
+        const w = Math.max(1, Math.round(icon.width * scale));
+        const h = Math.max(1, Math.round(icon.height * scale));
+        context.drawImage(icon, Math.round(c - w / 2 + .5), Math.round(c - h / 2 + .5), w, h);
+      }
+      spriteCache.set(key, surface);
+      return surface;
+    }
+
+    function drawPickupBadges(nowMs) {
+      const sx = canvas.width / W;
+      const sy = canvas.height / H;
+      const pixel = PIXEL * sx;
+      ctx.imageSmoothingEnabled = false;
+      game.pickups.forEach((pickup) => {
+        const life = core.PICKUP.lifetime_s - pickup.age_s;
+        const alpha = Math.max(0, Math.min(1, life / core.PICKUP.fade_s));
+        const phase = (idNumber(pickup.id) % 13) * .48;
+        const bob = Math.sin(nowMs / 520 + phase) * 3.5;
+        const sway = Math.cos(nowMs / 830 + phase) * 1.5;
+        const badge = badgeSurface(pickup.kind);
+        const glow = .85 + .15 * Math.sin(nowMs / 300 + phase);
+        const size = badge.width * pixel;
+        ctx.globalAlpha = alpha * glow;
+        ctx.drawImage(badge, Math.round((pickup.x + sway) * sx - size / 2), Math.round((pickup.y + bob) * sy - size / 2), size, size);
+      });
+      ctx.globalAlpha = 1;
+    }
+
     // ---- v15 visuals ----
     // Shield colours by layer: cyan, green, magenta, gold.
     const SHIELD_TINTS = ["C", "L", "M", "Y"];
@@ -4497,6 +4552,8 @@
       }
 
       game.pickups.forEach((pickup) => {
+        // With the art loaded, pickups are badges drawn over the pixel layer at full resolution (drawPickupBadges).
+        if (art.image) return;
         // Fade over the last seconds of life instead of vanishing (quantised for a stepped arcade fade).
         const life = core.PICKUP.lifetime_s - pickup.age_s;
         const alpha = Math.max(0, Math.min(1, life / core.PICKUP.fade_s));
@@ -4643,6 +4700,7 @@
 
       ctx.imageSmoothingEnabled = false;
       ctx.drawImage(lo, 0, 0, LO_W, LO_H, 0, 0, canvas.width, canvas.height);
+      if (art.image && !paused && !game.terminal) drawPickupBadges(nowMs);
     }
 
     async function restartRun(reason = "reset") {

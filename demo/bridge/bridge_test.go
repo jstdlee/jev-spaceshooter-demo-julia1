@@ -1343,7 +1343,7 @@ func TestPickupQuestionAndGrabAnswer(t *testing.T) {
 	if got := criteria.Get("up__medium"); !strings.HasPrefix(got.(string), "Tier 1 GOOD") || !strings.Contains(got.(string), "toward weapon") {
 		t.Errorf("toward the pickup: %q", got)
 	}
-	if got := criteria.Get("down__medium"); !strings.HasPrefix(got.(string), "Tier 2 OK") {
+	if got := criteria.Get("down__medium"); !strings.HasPrefix(got.(string), "Tier 2 OK") || !strings.Contains(got.(string), "drifts away from the weapon") {
 		t.Errorf("away from the pickup: %q", got)
 	}
 	// Without the answer, the pickup does not touch the path tiers.

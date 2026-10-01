@@ -16,6 +16,13 @@ const REWRITES = {
   'outcome-words': (label) => outcomeWords(label),
   'drop-zone': (label) => dropZone(label),
   'outcome-drop-zone': (label) => dropZone(outcomeWords(label)),
+  // v15: momentum only on the top-tier moves (Julia follows "keeps course" even down a tier).
+  'keep-course-top-only': (label, best) => tierOf(label) > best ? label.replace(', keeps course', '') : label,
+  'state-the-cost-all': (label, best, target) => target && tierOf(label) > best && tierOf(label) <= 3 && !label.includes('toward')
+    ? label.replace(/\.$/, `, drifts away from the ${target}.`).replace(', keeps course', '') : label,
+  // Say what a demoted safe move costs: it drifts away from the chosen target (from the top labels' "toward X").
+  'state-the-cost': (label, best, target) => target && tierOf(label) > best && /^Tier [12] /.test(label) && !label.includes('toward')
+    ? label.replace(/\.$/, `, drifts away from the ${target}.`).replace(', keeps course', '') : label,
 };
 
 function outcomeWords(label) {
@@ -65,7 +72,9 @@ async function main() {
   for (const payload of sample) {
     const p = JSON.parse(JSON.stringify(payload));
     const criteria = p.questions.path.criteria;
-    for (const k of Object.keys(criteria)) criteria[k] = rewrite(criteria[k]);
+    const bestTier = Math.min(...Object.values(criteria).map(tierOf));
+    const toward = Object.values(criteria).map((l) => /toward (\w+)/.exec(l)).find(Boolean);
+    for (const k of Object.keys(criteria)) criteria[k] = rewrite(criteria[k], bestTier, toward && toward[1]);
     p.questions = { path: p.questions.path };     // only the lane under test
     const r = await fetch(`${o.url}/v1/systemone`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(p) });
     const body = await r.json();

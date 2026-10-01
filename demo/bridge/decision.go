@@ -706,11 +706,19 @@ func futureLabel(row PathRow, tier, prefix string) string {
 		return fmt.Sprintf("%s: %s, mostly hit.", prefix, futuresPhrase(f))
 	}
 	parts := []string{futuresPhrase(f)}
-	if row.Motion == "continues" {
+	// With a target chosen by the model, every safe move says where it goes: toward the target, or away from it.
+	// Offline replay of 600 logged half-threat states: best-tier picks 46.8% with "toward" alone (Julia followed
+	// "keeps course" down a tier, up into the formation), 73.7% when the other moves state the cost and drop the
+	// momentum word.
+	away := row.Toward != "" && row.TowardProgress <= centerProgressMinPx
+	if row.Motion == "continues" && !away {
 		parts = append(parts, "keeps course")
 	}
 	if row.Toward != "" && row.TowardProgress > centerProgressMinPx {
 		parts = append(parts, "toward "+row.Toward)
+	}
+	if away {
+		parts = append(parts, "drifts away from the "+row.Toward)
 	}
 	return fmt.Sprintf("%s: %s.", prefix, strings.Join(parts, ", "))
 }
