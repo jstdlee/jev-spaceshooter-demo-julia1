@@ -1242,6 +1242,63 @@
       return { contact_ms:firstContact };
     }
 
+    // v2 sampled futures. The straight-line forecast above misses bullets fired after the observation, which at
+    // the doubled ceiling cross the arena in under 0.4 s. Here each move is played on clones of the game with the
+    // engine itself, K times, and every clone gets its own RNG state: enemy fire is sampled, never read from the
+    // real stream, so the forecast knows no more than the player could. A move's survival is the mean fraction of
+    // hold_ticks + follow_ticks survived (the follow-up is the best of the nine moves after hold_ticks).
+    const SAMPLED_FUTURES = Object.freeze({ k:4, hold_ticks:15, follow_ticks:15 });
+
+    function sampledRngState(tick, k) {
+      let h = (Math.imul(tick + 1, 2654435761) ^ Math.imul(k + 1, 40503)) >>> 0;
+      h = Math.imul(h ^ (h >>> 15), 2246822507) >>> 0;
+      return (h ^ (h >>> 13)) >>> 0 || 1;
+    }
+
+    function sampledFuturesForecast(game, { k = SAMPLED_FUTURES.k, hold_ticks = SAMPLED_FUTURES.hold_ticks, follow_ticks = SAMPLED_FUTURES.follow_ticks, prefix_movement = "hold", prefix_ticks = 0 } = {}) {
+      const full = hold_ticks + follow_ticks;
+      const play = (g, movement, ticks) => {
+        const lives = g.player.lives;
+        const command = { movement, fire:"shoot", decision_id:"forecast", sequence:0 };
+        for (let i = 0; i < ticks; i += 1) {
+          stepGame(g, command);
+          if (g.player.lives < lives || g.terminal) return i;
+        }
+        return ticks;
+      };
+      const base = serializeGame(game);
+      const out = Object.fromEntries(ACTION_IDS.map((id) => [id, { survived:0, clear:0, end:null }]));
+      let futures = 0;
+      for (let sample = 0; sample < k; sample += 1) {
+        const start = restoreGame(base);
+        start.rng.state = sampledRngState(game.tick, sample);
+        if (play(start, prefix_movement, prefix_ticks) < prefix_ticks) continue;   // lost before any new command lands
+        futures += 1;
+        const afterPrefix = serializeGame(start);
+        for (const id of ACTION_IDS) {
+          const first = restoreGame(afterPrefix);
+          let survived = play(first, id, hold_ticks);
+          if (survived === hold_ticks && follow_ticks > 0) {
+            const mid = serializeGame(first);
+            let best = -1;
+            for (const next of ACTION_IDS) {
+              best = Math.max(best, play(restoreGame(mid), next, follow_ticks));
+              if (best === follow_ticks) break;
+            }
+            survived += best;
+          }
+          out[id].survived += survived;
+          if (survived === full) out[id].clear += 1;
+          if (!out[id].end) out[id].end = { x:rounded(first.player.x), y:rounded(first.player.y) };
+        }
+      }
+      return Object.fromEntries(ACTION_IDS.map((id) => [id, {
+        k, futures, clear:out[id].clear,
+        survival: futures ? Number((out[id].survived / (futures * full)).toFixed(3)) : 0,
+        end: out[id].end,
+      }]));
+    }
+
     // `detail` adds the short-lease forecast and shot ETAs. No label uses them, and they were half the
     // forecast cost, so live decisions skip them; tests and debugging can opt back in.
     function observeGame(game, context = {}) {
@@ -1265,6 +1322,9 @@
       const horizonMs = Math.max(FORECAST_MIN_HORIZON_MS, expectedDelayMs + LEASE_MS.medium);
       const nearby = relevantThreats(game, Math.max(horizonMs, expectedDelayMs + LEASE_MS.medium + ESCAPE_LEG_MS));
       const prefix = forecastPrefix(game, expectedDelayMs, activeCommand, nearby);
+      const futuresConfig = context.sampled_futures ? { ...(context.sampled_futures === true ? {} : context.sampled_futures),
+        prefix_movement: activeCommand ? activeCommand.movement : "hold", prefix_ticks: Math.round(expectedDelayMs / DT_MS) } : null;
+      const futures = futuresConfig ? sampledFuturesForecast(game, futuresConfig) : null;
       const candidates = ACTION_IDS.map((id) => {
         const short = detail ? forecastPath(game, id, "short", expectedDelayMs, activeCommand, nearby) : null;
         const medium = forecastPath(game, id, "medium", expectedDelayMs, activeCommand, nearby, detail);
@@ -1287,7 +1347,7 @@
           wall_clamped: forecast.wall_clamped,
         });
         const escapeClearance = escape.escape_clearance_px === null || !Number.isFinite(escape.escape_clearance_px) ? null : rounded(escape.escape_clearance_px);
-        return { id, ...(short ? { short:project(short) } : {}), medium:{ ...project(medium), move_contact_ms:escape.move_contact_ms === null ? null : rounded(escape.move_contact_ms), escape_options:escape.escape_options, escape_clearance_px:escapeClearance, pickup_collect:pickup.collect, pickup_toward:pickup.toward } };
+        return { id, ...(short ? { short:project(short) } : {}), medium:{ ...project(medium), move_contact_ms:escape.move_contact_ms === null ? null : rounded(escape.move_contact_ms), escape_options:escape.escape_options, escape_clearance_px:escapeClearance, pickup_collect:pickup.collect, pickup_toward:pickup.toward, ...(futures ? { futures:futures[id] } : {}) } };
       });
       const state = {
         tick: game.tick,
@@ -2252,7 +2312,7 @@
     globalThis.SpaceDecisionCore = Object.freeze({
       ENGINE_VERSION, DT_MS, ACTION_IDS, FIRE_IDS, BOMB_IDS, MISSILE, BOMB, WEAPON, PICKUP, PICKUP_KINDS, EXTRA_LIFE, WINGMAN, BOSS, ENEMY_MISSILE, LEASE_TICKS, LEASE_MS, RULES, DEFAULT_DIFFICULTY, HARDEST_DIFFICULTY, LEGACY_MAX_DIFFICULTY, MAX_DIFFICULTY,
       createGame, stepGame, coordinateAction, stepPolicyTick, observeGame, serializeGame, restoreGame, hashGame, gameStatus,
-      normalizeDifficulty, arenaFor, velocityFor, waveProfile, baseEnemyCountForWave, enemyCountForWave,
+      sampledFuturesForecast, SAMPLED_FUTURES, normalizeDifficulty, arenaFor, velocityFor, waveProfile, baseEnemyCountForWave, enemyCountForWave,
       fireIntervalForDifficulty, bulletSpeedForDifficulty, rulesManifest, missileCap, bonusMissileCap,
       _private: Object.freeze({ sweptContact, segmentClearance, hostileThreats, stableStringify, rankRouteOptions }),
     });

@@ -23,7 +23,7 @@ const PROFILES = {
 };
 
 function parseArgs(argv) {
-  const options = { url: 'http://127.0.0.1:7870', seeds: [1, 2, 3, 4, 5, 6, 7, 8], profile: 'browser-hard', latencyMs: 220, seconds: 120, verbose: false };
+  const options = { url: 'http://127.0.0.1:7870', seeds: [1, 2, 3, 4, 5, 6, 7, 8], profile: 'browser-hard', latencyMs: 220, seconds: 120, verbose: false, futures: 0 };
   for (let i = 0; i < argv.length; i += 1) {
     const value = () => argv[++i];
     const arg = argv[i];
@@ -36,6 +36,7 @@ function parseArgs(argv) {
     else if (arg === '--latency-ms') options.latencyMs = Number(value());
     else if (arg === '--seconds') options.seconds = Number(value());
     else if (arg === '--verbose') options.verbose = true;
+    else if (arg === '--futures') options.futures = Number(value());   // v2: K sampled futures per decision (0 = off)
     else throw new Error(`unknown argument ${arg}`);
   }
   if (!PROFILES[options.profile]) throw new Error(`unknown profile ${options.profile}`);
@@ -81,7 +82,9 @@ async function runSeed(modules, options, seed) {
       const requestMs = game.tick * DT;
       const active = activeCommandForObservation(control.active || null, game.tick, requestMs);
       const stats8 = { expected_delay_ms: options.latencyMs, latency_samples: 8, latency_spread_ms: 0 };
-      const observed = core.observeGame(game, buildObservationContext({ control, stats: stats8, activeCommand: active, recentCommands: [], recentHits: [], currentSimMs: game.sim_ms }));
+      const context = buildObservationContext({ control, stats: stats8, activeCommand: active, recentCommands: [], recentHits: [], currentSimMs: game.sim_ms });
+      if (options.futures > 0) context.sampled_futures = { k: options.futures };
+      const observed = core.observeGame(game, context);
       const body = api.beginDecision(control, { tick: game.tick, wall_ms: requestMs, state: observed.state, forecast: observed.forecast, checkpoint: core.serializeGame(game) });
       const reply = await post(options.url, '/api/decision', body);
       stats.decisions += 1;
@@ -94,7 +97,10 @@ async function runSeed(modules, options, seed) {
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   const modules = loadSpaceModulesFromHtml(path.join(__dirname, 'space-shooter.html'));
-  const results = await Promise.all(options.seeds.map((seed) => runSeed(modules, options, seed)));
+  // Sampled futures are CPU-heavy, so their seeds run one at a time.
+  const results = options.futures > 0
+    ? await options.seeds.reduce(async (done, seed) => [...await done, await runSeed(modules, options, seed)], Promise.resolve([]))
+    : await Promise.all(options.seeds.map((seed) => runSeed(modules, options, seed)));
   for (const r of results) {
     console.log(JSON.stringify(options.verbose ? r : { seed: r.seed, sim_s: r.sim_s, lives: r.lives, wave: r.wave, kills: r.kills, bombs: r.bombs, picked: `${r.bomb_pickups}b+${r.weapon_pickups}w+${r.wingman_pickups}j+${r.missile_pickups}m/${r.pickups_spawned}`, missile_cap: r.missile_cap, weapon: r.weapon_level, jets: r.jets, bosses: r.bosses, intercepted: r.intercepted, sacrifices: r.sacrifices, decisions: r.decisions, hits: r.hits.map((h) => `${h.t}s@${h.x},${h.y}`).join(' ') }));
   }

@@ -16,6 +16,7 @@ type oracleUpstream struct{}
 var (
 	tierPattern    = regexp.MustCompile(`^Tier (\d) `)
 	escapesPattern = regexp.MustCompile(`(\d)/9 escapes`)
+	futuresPattern = regexp.MustCompile(`survives (\d+)/(\d+) futures`)
 	hitInPattern   = regexp.MustCompile(`hits the ship in (\d+) ms`)
 )
 
@@ -33,6 +34,13 @@ func oracleScore(label string) (tier int, score float64) {
 	if escapes := escapesPattern.FindStringSubmatch(label); escapes != nil {
 		n, _ := strconv.Atoi(escapes[1])
 		score += float64(n) * 1000
+	}
+	if futures := futuresPattern.FindStringSubmatch(label); futures != nil {
+		n, _ := strconv.Atoi(futures[1])
+		score += float64(n) * 1000
+	}
+	if strings.Contains(label, "back to zone") {
+		score += 2
 	}
 	if strings.Contains(label, "keeps course") {
 		score += 100

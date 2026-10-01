@@ -1,0 +1,5 @@
+step	policy	profile	seeds	seconds	mean_s	min_s	full	hits	note
+0a	label-oracle (bridge --upstream oracle, v13 labels)	max	1-8	60	60.0	60	8/8	7	old 4/4 ceiling still passes
+0b	label-oracle (bridge --upstream oracle, v13 labels)	max2x	1-8	60	12.9	9.3	0/8	24	perfect label reader dies: labels/forecast insufficient at 2x
+0c	forecast-argmax (lab, escapes+clearance, no position)	max2x	1-8	60	11.1	9.5	0/8	24	autopsy: safe moves existed until ~0.3s before each hit; dies at walls / top
+step0d	rollout-ceiling (future-knowing, survival only)	max2x	1-8	60	47.3	22.6	3/8	20	deaths at top (y<100) and side walls; no position strategy

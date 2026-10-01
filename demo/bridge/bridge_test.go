@@ -1112,3 +1112,41 @@ func TestHomeZoneTierAndTags(t *testing.T) {
 		t.Error("zone rule must not touch DEADLY")
 	}
 }
+
+func TestFutureTiersLabelsAndOracle(t *testing.T) {
+	row := func(survival float64, clear int64, startX, startY, endX, endY float64) PathRow {
+		return PathRow{WallRoom: 200, Motion: "turns", Futures: &FutureRow{Survival: survival, Clear: clear, Futures: 4},
+			ZoneStartOut: stationOutside(startX, startY), ZoneEndOut: stationOutside(endX, endY)}
+	}
+	cases := []struct {
+		name  string
+		r     PathRow
+		tier  string
+		label string
+	}{
+		{"all futures, in station", row(1, 4, 480, 530, 470, 530), "GOOD", "Tier 1 GOOD: survives 4/4 futures."},
+		{"all futures, leaves station", row(1, 4, 480, 440, 480, 420), "OK", "Tier 2 OK: survives 4/4 futures, leaves zone."},
+		{"all futures, heads back", row(1, 4, 480, 380, 480, 400), "GOOD", "Tier 1 GOOD: survives 4/4 futures, back to zone."},
+		{"most futures", row(0.95, 3, 480, 530, 470, 530), "OK", "Tier 2 OK: survives 3/4 futures."},
+		{"some futures", row(0.7, 2, 480, 530, 470, 530), "RISKY", "Tier 3 RISKY: survives 2/4 futures."},
+		{"mostly hit", row(0.4, 0, 480, 530, 470, 530), "DOOMED", "Tier 5 DOOMED: survives 0/4 futures, mostly hit."},
+		{"every future hit", row(0, 0, 480, 530, 470, 530), "DEADLY", "Tier 6 DEADLY: the ship is hit in every sampled future."},
+	}
+	for _, tc := range cases {
+		if got := pathTier(tc.r); got != tc.tier {
+			t.Errorf("%s: tier %s, want %s", tc.name, got, tc.tier)
+		}
+		if got := pathLabel(tc.r); got != tc.label {
+			t.Errorf("%s: label %q, want %q", tc.name, got, tc.label)
+		}
+	}
+	// The oracle ranks by tier, then futures survived.
+	criteria := map[string]any{
+		"a": pathLabel(row(0.95, 3, 480, 530, 470, 530)),
+		"b": pathLabel(row(1, 4, 480, 530, 470, 530)),
+		"c": pathLabel(row(0.7, 2, 480, 530, 470, 530)),
+	}
+	if got := oracleChoice(criteria, []string{"a", "b", "c"}); got != "b" {
+		t.Errorf("oracle picked %s, want b", got)
+	}
+}

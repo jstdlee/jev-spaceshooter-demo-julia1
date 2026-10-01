@@ -62,6 +62,12 @@ const (
 	// without closing in by zoneProgressPx becomes OK, so the ship returns when it safely can.
 	zoneMinX, zoneMaxX = 120.0, 840.0
 	zoneMinY, zoneMaxY = 77.5, 542.5
+	// v2 station: when the game sends sampled futures, the preferred place is a low band away from the side walls.
+	// Low buys reaction time against shots from above; the side walls halve the escape directions. Measured with
+	// the lab's Monte-Carlo policy at the doubled ceiling (docs/v2).
+	stationMinX, stationMaxX = 200.0, 760.0
+	stationMinY, stationMaxY = 430.0, 620.0
+	stationCenterX, stationCenterY = 480.0, 530.0
 	zoneProgressPx     = 10
 	pathInstructions   = "Pick the move that keeps the ship alive. Each move starts with its tier number: 1 is best, 6 is worst. Always pick a move with the lowest tier number present. Within that tier prefer more escapes, then keeps course, then not near enemy, then open space, then toward center. If every move is tier 6, pick the one hit latest."
 	fireInstructions   = "Choose shoot if enemy_count>0, otherwise cease. Shoot also launches homing missiles."
@@ -296,6 +302,19 @@ type PathRow struct {
 	PickupWanted    bool    // any move collects or approaches a wanted pickup
 	ZoneStartOut    float64 // ship's distance outside the home zone now (0 inside)
 	ZoneEndOut      float64 // the move endpoint's distance outside the home zone (0 inside)
+	Futures         *FutureRow // v2 sampled futures, when the game sends them
+}
+
+// FutureRow is the v2 sampled-futures forecast of one move: the engine played on K clones with sampled enemy fire.
+type FutureRow struct {
+	Survival float64 // mean fraction of the forecast window survived, 0..1
+	Clear    int64   // futures survived to the end of the window
+	Futures  int64   // futures that were still alive when the command would land
+}
+
+// stationOutside is how far a point lies outside the v2 station band (0 inside).
+func stationOutside(x, y float64) float64 {
+	return math.Max(0, math.Max(stationMinX-x, x-stationMaxX)) + math.Max(0, math.Max(stationMinY-y, y-stationMaxY))
 }
 
 // zoneOutside is how far a point lies outside the home zone along x plus along y (0 inside).
@@ -375,16 +394,36 @@ func pathTable(value any, player *packedPlayer, currentMovement string) ([]PathR
 		if err != nil {
 			return nil, err
 		}
+		futures, err := futureRow(prediction["futures"], name+".futures")
+		if err != nil {
+			return nil, err
+		}
+		zoneStart, zoneEnd := zoneOutside(player.x, player.y), zoneOutside(*endX, *endY)
+		centerProgress := centerDistance - math.Hypot(*endX-ArenaCenterX, *endY-ArenaCenterY)
+		if futures != nil {
+			fx, fy := *endX, *endY
+			if end, ok := prediction["futures"].(map[string]any)["end"].(map[string]any); ok {
+				if _, x, err := observedNumber(end, "x", name+".futures.end", false, nil); err == nil {
+					fx = *x
+				}
+				if _, y, err := observedNumber(end, "y", name+".futures.end", false, nil); err == nil {
+					fy = *y
+				}
+			}
+			zoneStart, zoneEnd = stationOutside(player.x, player.y), stationOutside(fx, fy)
+			centerProgress = math.Hypot(player.x-stationCenterX, player.y-stationCenterY) - math.Hypot(fx-stationCenterX, fy-stationCenterY)
+		}
 		rows = append(rows, PathRow{
+			Futures:         futures,
 			PickupCollect:   collect,
 			PickupToward:    toward,
 			Path:            movement + "__" + LivePathLease,
 			Collision:       contact != nil,
 			GapRaw:          gapRaw,
 			WallRoom:        wallRoom,
-			CenterProgress:  round(centerDistance-math.Hypot(*endX-ArenaCenterX, *endY-ArenaCenterY), 1),
-			ZoneStartOut:    round(zoneOutside(player.x, player.y), 1),
-			ZoneEndOut:      round(zoneOutside(*endX, *endY), 1),
+			CenterProgress:  round(centerProgress, 1),
+			ZoneStartOut:    round(zoneStart, 1),
+			ZoneEndOut:      round(zoneEnd, 1),
 			Crowd:           crowd,
 			MoveCollisionMs: moveContact,
 			EscapeOptions:   escapes,
@@ -405,7 +444,62 @@ func pathTable(value any, player *packedPlayer, currentMovement string) ([]PathR
 
 func (row PathRow) nearEnemy() bool { return row.EnemyGapPx != nil && *row.EnemyGapPx < nearEnemyPx }
 
+// futureRow parses the optional v2 sampled-futures object of one candidate.
+func futureRow(value any, name string) (*FutureRow, error) {
+	if value == nil {
+		return nil, nil
+	}
+	object, err := requireObject(value, name)
+	if err != nil {
+		return nil, err
+	}
+	_, survivalPtr, err := observedNumber(object, "survival", name, false, min0())
+	if err != nil {
+		return nil, err
+	}
+	survival := *survivalPtr
+	if survival > 1 {
+		return nil, validationError("%s.survival must be a number in [0, 1]", name)
+	}
+	clear, err := nonnegativeInt(object["clear"], name+".clear")
+	if err != nil {
+		return nil, err
+	}
+	futures, err := nonnegativeInt(object["futures"], name+".futures")
+	if err != nil {
+		return nil, err
+	}
+	return &FutureRow{Survival: survival, Clear: clear, Futures: futures}, nil
+}
+
+// futureTier is the v2 tier: the share of sampled futures a move survives, then the station preference. A safe
+// move that ends near a side wall or outside the station without heading back drops one tier, never below RISKY.
+func futureTier(row PathRow) string {
+	f := row.Futures
+	switch {
+	case f.Survival <= 0:
+		return "DEADLY"
+	case f.Survival < 0.6:
+		return "DOOMED"
+	case row.WallRoom < trapWallRoomPx:
+		return "TRAP"
+	}
+	tier := "RISKY"
+	if f.Survival >= 0.999 {
+		tier = "GOOD"
+	} else if f.Survival >= 0.9 {
+		tier = "OK"
+	}
+	if row.WallRoom < nearWallRoomPx || (row.ZoneEndOut > 0 && !row.zoneReturning()) {
+		tier = shiftTier(tier, 1)
+	}
+	return tier
+}
+
 func pathTier(row PathRow) string {
+	if row.Futures != nil {
+		return futureTier(row)
+	}
 	switch {
 	case row.MoveCollisionMs != nil:
 		return "DEADLY"
@@ -477,6 +571,9 @@ func shiftTier(tier string, delta int) string {
 func pathLabel(row PathRow) string {
 	tier := pathTier(row)
 	prefix := fmt.Sprintf("Tier %d %s", pathTiers[tier], tier)
+	if row.Futures != nil {
+		return futureLabel(row, tier, prefix)
+	}
 	switch tier {
 	case "DEADLY":
 		return fmt.Sprintf("%s: a threat hits the ship in %d ms.", prefix, int64(*row.MoveCollisionMs))
@@ -516,6 +613,38 @@ func pathLabel(row PathRow) string {
 	}
 	// Julia 1 weighs every motion word about as heavily as the safety tier (for example it
 	// rates "stationary" above "continues"), so only the course-keeping fact is stated.
+	if row.Motion == "continues" {
+		parts = append(parts, "keeps course")
+	}
+	switch {
+	case row.zoneReturning():
+		parts = append(parts, "back to zone")
+	case row.ZoneEndOut > 0 && row.ZoneStartOut == 0:
+		parts = append(parts, "leaves zone")
+	case row.ZoneEndOut > 0:
+		parts = append(parts, "outside zone")
+	}
+	if row.CenterProgress > centerProgressPx {
+		parts = append(parts, "toward center")
+	}
+	return fmt.Sprintf("%s: %s.", prefix, strings.Join(parts, ", "))
+}
+
+// futureLabel is the v2 label: survival over sampled futures, then where the move leaves the ship.
+func futureLabel(row PathRow, tier, prefix string) string {
+	f := row.Futures
+	switch tier {
+	case "DEADLY":
+		return prefix + ": the ship is hit in every sampled future."
+	case "DOOMED":
+		return fmt.Sprintf("%s: survives %d/%d futures, mostly hit.", prefix, f.Clear, f.Futures)
+	case "TRAP":
+		return prefix + ": ends pinned against the wall with no escape room."
+	}
+	parts := []string{fmt.Sprintf("survives %d/%d futures", f.Clear, f.Futures)}
+	if row.WallRoom < nearWallRoomPx {
+		parts = append(parts, "near wall")
+	}
 	if row.Motion == "continues" {
 		parts = append(parts, "keeps course")
 	}
