@@ -68,6 +68,9 @@ const (
 	stationMinX, stationMaxX = 200.0, 760.0
 	stationMinY, stationMaxY = 430.0, 620.0
 	stationCenterX, stationCenterY = 480.0, 530.0
+	// Inside the station, GOOD also needs the move to end in its central core or head toward the centre;
+	// otherwise "keeps course" carried the ship along the band and out of it (seed 6, v2 run 2).
+	stationCoreMinX, stationCoreMaxX = 320.0, 640.0
 	zoneProgressPx     = 10
 	pathInstructions   = "Pick the move that keeps the ship alive. Each move starts with its tier number: 1 is best, 6 is worst. Always pick a move with the lowest tier number present. Within that tier prefer more escapes, then keeps course, then not near enemy, then open space, then toward center. If every move is tier 6, pick the one hit latest."
 	fireInstructions   = "Choose shoot if enemy_count>0, otherwise cease. Shoot also launches homing missiles."
@@ -291,6 +294,7 @@ type PathRow struct {
 	GapRaw          any // original clearance_px value (nil when null)
 	WallRoom        float64
 	CenterProgress  float64
+	EndX            float64 // v2: where the move leaves the ship (sampled futures), for the station core
 	Crowd           int64
 	MoveCollisionMs *float64
 	EscapeOptions   int64
@@ -399,6 +403,7 @@ func pathTable(value any, player *packedPlayer, currentMovement string) ([]PathR
 			return nil, err
 		}
 		zoneStart, zoneEnd := zoneOutside(player.x, player.y), zoneOutside(*endX, *endY)
+		endXFuture := *endX
 		centerProgress := centerDistance - math.Hypot(*endX-ArenaCenterX, *endY-ArenaCenterY)
 		if futures != nil {
 			fx, fy := *endX, *endY
@@ -411,10 +416,12 @@ func pathTable(value any, player *packedPlayer, currentMovement string) ([]PathR
 				}
 			}
 			zoneStart, zoneEnd = stationOutside(player.x, player.y), stationOutside(fx, fy)
+			endXFuture = fx
 			centerProgress = math.Hypot(player.x-stationCenterX, player.y-stationCenterY) - math.Hypot(fx-stationCenterX, fy-stationCenterY)
 		}
 		rows = append(rows, PathRow{
 			Futures:         futures,
+			EndX:            endXFuture,
 			PickupCollect:   collect,
 			PickupToward:    toward,
 			Path:            movement + "__" + LivePathLease,
@@ -492,6 +499,8 @@ func futureTier(row PathRow) string {
 	}
 	if row.WallRoom < nearWallRoomPx || (row.ZoneEndOut > 0 && !row.zoneReturning()) {
 		tier = shiftTier(tier, 1)
+	} else if tier == "GOOD" && row.ZoneEndOut == 0 && (row.EndX < stationCoreMinX || row.EndX > stationCoreMaxX) && row.CenterProgress <= centerProgressPx {
+		tier = "OK"
 	}
 	return tier
 }
@@ -630,6 +639,16 @@ func pathLabel(row PathRow) string {
 	return fmt.Sprintf("%s: %s.", prefix, strings.Join(parts, ", "))
 }
 
+// futuresPhrase states the outcome as hits. Offline replay of 800 logged 2x states: Julia picked a best-tier move
+// 90.8% of the time with "survives 3/4 futures" and 98.6% with "hit in 1 of 4 futures"; its outcome judgement
+// ("What happens to the ship?") reacts to the word hit, not to a fraction.
+func futuresPhrase(f *FutureRow) string {
+	if f.Clear == f.Futures {
+		return fmt.Sprintf("safe in all %d futures", f.Futures)
+	}
+	return fmt.Sprintf("hit in %d of %d futures", f.Futures-f.Clear, f.Futures)
+}
+
 // futureLabel is the v2 label: survival over sampled futures, then where the move leaves the ship.
 func futureLabel(row PathRow, tier, prefix string) string {
 	f := row.Futures
@@ -637,11 +656,11 @@ func futureLabel(row PathRow, tier, prefix string) string {
 	case "DEADLY":
 		return prefix + ": the ship is hit in every sampled future."
 	case "DOOMED":
-		return fmt.Sprintf("%s: survives %d/%d futures, mostly hit.", prefix, f.Clear, f.Futures)
+		return fmt.Sprintf("%s: %s, mostly hit.", prefix, futuresPhrase(f))
 	case "TRAP":
 		return prefix + ": ends pinned against the wall with no escape room."
 	}
-	parts := []string{fmt.Sprintf("survives %d/%d futures", f.Clear, f.Futures)}
+	parts := []string{futuresPhrase(f)}
 	if row.WallRoom < nearWallRoomPx {
 		parts = append(parts, "near wall")
 	}

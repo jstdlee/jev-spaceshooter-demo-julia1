@@ -16,7 +16,8 @@ type oracleUpstream struct{}
 var (
 	tierPattern    = regexp.MustCompile(`^Tier (\d) `)
 	escapesPattern = regexp.MustCompile(`(\d)/9 escapes`)
-	futuresPattern = regexp.MustCompile(`survives (\d+)/(\d+) futures`)
+	futuresSafe    = regexp.MustCompile(`safe in all (\d+) futures`)
+	futuresHit     = regexp.MustCompile(`hit in (\d+) of (\d+) futures`)
 	hitInPattern   = regexp.MustCompile(`hits the ship in (\d+) ms`)
 )
 
@@ -35,15 +36,34 @@ func oracleScore(label string) (tier int, score float64) {
 		n, _ := strconv.Atoi(escapes[1])
 		score += float64(n) * 1000
 	}
-	if futures := futuresPattern.FindStringSubmatch(label); futures != nil {
-		n, _ := strconv.Atoi(futures[1])
-		score += float64(n) * 1000
+	if safe := futuresSafe.FindStringSubmatch(label); safe != nil {
+		k, _ := strconv.Atoi(safe[1])
+		score += float64(k) * 1000
+	} else if hit := futuresHit.FindStringSubmatch(label); hit != nil {
+		h, _ := strconv.Atoi(hit[1])
+		k, _ := strconv.Atoi(hit[2])
+		score += float64(k-h) * 1000
+	}
+
+	// For sampled-futures labels position comes before momentum, as in the lab policy (position weight 0.5,
+	// keep weight 0.02); the older labels keep their original order.
+	futuresLabel := futuresSafe.MatchString(label) || futuresHit.MatchString(label)
+	if strings.Contains(label, "keeps course") {
+		if futuresLabel {
+			score += 1
+		} else {
+			score += 100
+		}
+	}
+	if futuresLabel && strings.Contains(label, "toward center") {
+		score += 50
 	}
 	if strings.Contains(label, "back to zone") {
-		score += 2
-	}
-	if strings.Contains(label, "keeps course") {
-		score += 100
+		if futuresLabel {
+			score += 60
+		} else {
+			score += 2
+		}
 	}
 	if !strings.Contains(label, "near enemy") {
 		score += 10

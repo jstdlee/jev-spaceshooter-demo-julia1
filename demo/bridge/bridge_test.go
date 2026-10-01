@@ -1115,7 +1115,7 @@ func TestHomeZoneTierAndTags(t *testing.T) {
 
 func TestFutureTiersLabelsAndOracle(t *testing.T) {
 	row := func(survival float64, clear int64, startX, startY, endX, endY float64) PathRow {
-		return PathRow{WallRoom: 200, Motion: "turns", Futures: &FutureRow{Survival: survival, Clear: clear, Futures: 4},
+		return PathRow{WallRoom: 200, Motion: "turns", EndX: endX, Futures: &FutureRow{Survival: survival, Clear: clear, Futures: 4},
 			ZoneStartOut: stationOutside(startX, startY), ZoneEndOut: stationOutside(endX, endY)}
 	}
 	cases := []struct {
@@ -1124,12 +1124,12 @@ func TestFutureTiersLabelsAndOracle(t *testing.T) {
 		tier  string
 		label string
 	}{
-		{"all futures, in station", row(1, 4, 480, 530, 470, 530), "GOOD", "Tier 1 GOOD: survives 4/4 futures."},
-		{"all futures, leaves station", row(1, 4, 480, 440, 480, 420), "OK", "Tier 2 OK: survives 4/4 futures, leaves zone."},
-		{"all futures, heads back", row(1, 4, 480, 380, 480, 400), "GOOD", "Tier 1 GOOD: survives 4/4 futures, back to zone."},
-		{"most futures", row(0.95, 3, 480, 530, 470, 530), "OK", "Tier 2 OK: survives 3/4 futures."},
-		{"some futures", row(0.7, 2, 480, 530, 470, 530), "RISKY", "Tier 3 RISKY: survives 2/4 futures."},
-		{"mostly hit", row(0.4, 0, 480, 530, 470, 530), "DOOMED", "Tier 5 DOOMED: survives 0/4 futures, mostly hit."},
+		{"all futures, in station", row(1, 4, 480, 530, 470, 530), "GOOD", "Tier 1 GOOD: safe in all 4 futures."},
+		{"all futures, leaves station", row(1, 4, 480, 440, 480, 420), "OK", "Tier 2 OK: safe in all 4 futures, leaves zone."},
+		{"all futures, heads back", row(1, 4, 480, 380, 480, 400), "GOOD", "Tier 1 GOOD: safe in all 4 futures, back to zone."},
+		{"most futures", row(0.95, 3, 480, 530, 470, 530), "OK", "Tier 2 OK: hit in 1 of 4 futures."},
+		{"some futures", row(0.7, 2, 480, 530, 470, 530), "RISKY", "Tier 3 RISKY: hit in 2 of 4 futures."},
+		{"mostly hit", row(0.4, 0, 480, 530, 470, 530), "DOOMED", "Tier 5 DOOMED: hit in 4 of 4 futures, mostly hit."},
 		{"every future hit", row(0, 0, 480, 530, 470, 530), "DEADLY", "Tier 6 DEADLY: the ship is hit in every sampled future."},
 	}
 	for _, tc := range cases {
@@ -1139,6 +1139,16 @@ func TestFutureTiersLabelsAndOracle(t *testing.T) {
 		if got := pathLabel(tc.r); got != tc.label {
 			t.Errorf("%s: label %q, want %q", tc.name, got, tc.label)
 		}
+	}
+	// In the station but outside its core, GOOD needs progress toward the centre.
+	edge := row(1, 4, 600, 530, 700, 530)
+	edge.EndX = 700
+	if got := pathTier(edge); got != "OK" {
+		t.Errorf("drifting out along the station: tier %s, want OK", got)
+	}
+	edge.CenterProgress = 30
+	if got := pathTier(edge); got != "GOOD" {
+		t.Errorf("heading back to the centre from the station edge: tier %s, want GOOD", got)
 	}
 	// The oracle ranks by tier, then futures survived.
 	criteria := map[string]any{
