@@ -1509,6 +1509,7 @@
             enemies_near: game.enemies.filter(near).length,
             center_distance_px: rounded(Math.hypot(game.player.x - WIDTH / 2, game.player.y - HEIGHT / 2)),
             wall_distance_px: rounded(Math.min(game.player.x, WIDTH - game.player.x, game.player.y, HEIGHT - game.player.y)),
+            height_px: rounded(game.player.y),
           };
         })(),
         weapon_level: game.weaponLevel,
@@ -3876,6 +3877,91 @@
     };
     const RAINBOW = ["R", "O", "Y", "L", "C", "P", "M"];
     const spriteCache = new Map();
+
+    // ---- v15 art: demo/assets/atlas.png + atlas.json, cut from the raw art sheets by tools/art/build_atlas.py at this
+    // retro pixel scale. Every draw below uses the art when it is loaded and falls back to the pixel maps otherwise
+    // (file:// pages, tests). Visual only: nothing here feeds back into the simulation.
+    const art = { image:null, frames:null };
+
+    function loadArt() {
+      if (isFileProtocol || typeof Image === "undefined" || typeof fetch !== "function") return;
+      fetch("assets/atlas.json", { cache:"no-cache" }).then((response) => response.ok ? response.json() : null).then((atlas) => {
+        if (!atlas || !atlas.frames) return;
+        const image = new Image();
+        image.onload = () => { art.image = image; art.frames = atlas.frames; };
+        image.src = "assets/atlas.png";
+      }).catch(() => {});
+    }
+
+    function artSprite(name) {
+      if (!art.image || !art.frames || !art.frames[name]) return null;
+      const key = `art:${name}`;
+      if (spriteCache.has(key)) return spriteCache.get(key);
+      const [x, y, w, h] = art.frames[name];
+      const [surface, context] = makeCanvas(w, h);
+      context.drawImage(art.image, x, y, w, h, 0, 0, w, h);
+      spriteCache.set(key, surface);
+      return surface;
+    }
+
+    // Frame `index` (wrapped) of an animation named base_0, base_1, ...
+    function artFrame(base, count, index) {
+      return artSprite(`${base}_${((index % count) + count) % count}`);
+    }
+
+    // Rotated art, quantised to 16 headings and cached like rotatedSprite.
+    function artRotated(name, angle) {
+      const base = artSprite(name);
+      if (!base) return null;
+      const step = ((Math.round(angle / (Math.PI / 8)) % 16) + 16) % 16;
+      const key = `art:${name}:r${step}`;
+      if (spriteCache.has(key)) return spriteCache.get(key);
+      const size = Math.ceil(Math.hypot(base.width, base.height)) | 1;
+      const [surface, context] = makeCanvas(size, size);
+      context.translate(size / 2, size / 2);
+      context.rotate(step * Math.PI / 8);
+      context.drawImage(base, -base.width / 2, -base.height / 2);
+      spriteCache.set(key, surface);
+      return surface;
+    }
+
+    // Draws art centred at a game position; returns false when the art is not loaded (the caller draws the pixel map).
+    function blitArt(surface, x, y, alpha = 1) {
+      if (!surface) return false;
+      if (alpha !== 1) lctx.globalAlpha = Math.max(0, Math.min(1, alpha));
+      blit(surface, x, y);
+      if (alpha !== 1) lctx.globalAlpha = 1;
+      return true;
+    }
+
+    const idNumber = (id) => Number(String(id).replace(/\D+/g, "")) || 0;
+    const BOSS_ART = ["boss_mantis", "boss_hydra", "boss_battleship", "boss_alien", "boss_rhino", "boss_hydra_green", "boss_mantis_grey",
+      "boss_capital_0", "boss_capital_1", "boss_capital_2", "boss_capital_3", "boss_capital_4", "boss_capital_5"];
+
+    function enemyArt(enemy) {
+      const alt = Math.floor((game.wave - 1) / 3) % 2 === 1;
+      const n = idNumber(enemy.id);
+      if (enemy.type === "boss") return artSprite(BOSS_ART[(game.counters.bossesSpawned - 1 + BOSS_ART.length) % BOSS_ART.length]);
+      if (enemy.type === "tank") return artSprite(alt ? ["turret_twin", "turret_base"][n % 2] : "crab");
+      if (enemy.type === "swarm") return artSprite(alt ? "hornet" : "wasp");
+      return artSprite(alt ? ["dart", "dart_a", "dart_b", "dart_c"][n % 4] : `stealth_${n % 6}`);
+    }
+
+    function playerShotArt(shot, nowMs) {
+      if (shot.wingman !== undefined) return artSprite((shot.level || 0) >= 3 ? "fire_bolt" : "bolt_small");
+      if (shot.explosive) return artFrame("orb", 3, Math.floor(nowMs / 90));
+      if (shot.rapid) return artSprite("needle");
+      const level = shot.level || 0;
+      return level >= 5 ? artSprite("comet") : artSprite(`round_${Math.min(3, level)}`);
+    }
+
+    function enemyBulletArt(shot, nowMs) {
+      const tick = Math.floor(nowMs / 110) + idNumber(shot.id);
+      if (shot.fast) return artRotated(`redbolt_${tick % 4}`, Math.atan2(shot.vy, shot.vx) - Math.PI / 2);
+      if (shot.boss) return artSprite(tick % 2 ? "plasma_green_b" : "orb2");
+      if (shot.sweep) return artFrame("acid", 5, tick);
+      return artSprite(tick % 2 ? "plasma_green" : "acid_0");
+    }
     let lo = null;
     let lctx = null;
     let nebula = null;
@@ -3997,10 +4083,20 @@
         lastEnemySeen.delete(id);
         if (enemy.y > 0 && enemy.y < H - 10) blasts.push({ x:enemy.x, y:enemy.y, born:nowMs, big:enemy.type === "boss" ? 2 : enemy.type === "tank" ? 1 : 0 });
       }
-      blasts = blasts.filter((blast) => nowMs - blast.born < 420 + blast.big * 260);
+      blasts = blasts.filter((blast) => nowMs - blast.born < 420 + blast.big * 260 + (blast.big === 2 && art.image ? 700 : 0));
     }
 
     function drawBlast(blast, nowMs) {
+      // Art: the 8-frame fireball for ships, the 12-frame ship destruction for a boss (over a longer time), the heavy
+      // set for tanks.
+      if (art.image) {
+        const span = 420 + blast.big * 260 + (blast.big === 2 ? 700 : 0);
+        const u = Math.min(.999, (nowMs - blast.born) / span);
+        const artBoom = blast.big === 2 ? artFrame("shipboom", 12, Math.floor(u * 12))
+          : blast.big === 1 ? artSprite(`shipboom2_${[0, 4, 8][Math.min(2, Math.floor(u * 3))]}`)
+          : artFrame("boom", 8, Math.floor(u * 8));
+        if (blitArt(artBoom, blast.x, blast.y, u > .8 ? (1 - u) * 5 : 1)) return;
+      }
       const duration = 420 + blast.big * 260;
       const t = (nowMs - blast.born) / duration;
       const cx = lx(blast.x);
@@ -4075,6 +4171,14 @@
     function drawEnemyBullet(shot) {
       const x = lx(shot.x);
       const y = lx(shot.y);
+      if (blitArt(enemyBulletArt(shot, performance.now()), shot.x, shot.y)) {
+        if ((shot.hp ?? 1) >= 2) {
+          const r = 4;
+          px(x - r, y - 1, 1, 2, "G"); px(x + r, y - 1, 1, 2, "G");
+          px(x - 1, y - r, 2, 1, "G"); px(x - 1, y + r, 2, 1, "G");
+        }
+        return;
+      }
       if (shot.fast) {
         const speed = Math.hypot(shot.vx, shot.vy) || 1;
         const tx = -shot.vx / speed;
@@ -4232,6 +4336,15 @@
     // from the angle and time), outer layers turn the other way, and a hit flashes an expanding burst.
     function drawShields(nowMs) {
       const count = game.shields || 0;
+      const absorbing = shieldFlash && nowMs < shieldFlash.until;
+      if ((count > 0 || absorbing) && artSprite("shield_blue_0")) {
+        const hum = Math.floor(nowMs / 140);
+        if (absorbing) blitArt(artFrame("shield_blue", 8, 4 + Math.floor((380 - (shieldFlash.until - nowMs)) / 95)), game.player.x, game.player.y, .9);
+        else if (count >= 1) blitArt(artFrame("shield_blue", 4, hum), game.player.x, game.player.y, count >= 2 ? .95 : .7);
+        if (count >= 3) blitArt(artFrame("shield_hex", 8, hum), game.player.x, game.player.y, count >= 4 ? .95 : .65);
+        if (absorbing) blitArt(artSprite("impact_ripple"), shieldFlash.x, shieldFlash.y);
+        return;
+      }
       const cx = lx(game.player.x);
       const cy = lx(game.player.y);
       for (let layer = 0; layer < count; layer += 1) {
@@ -4265,6 +4378,15 @@
     // The assistance strike: a white-hot line rising from the bottom, a squadron of jets riding it, fire below it.
     function drawAssistSweep(nowMs) {
       if (!game.assist || game.assist.sweep_y === null) return;
+      const beam = artSprite("beam_mid");
+      if (beam) {
+        // The magenta beam laid across the arena, impact glows along it, and the escort squadron riding it.
+        for (let x = 0; x < W; x += beam.width * PIXEL) blit(beam, x + beam.width, game.assist.sweep_y);
+        for (let i = 0; i < 6; i += 1) blitArt(artFrame("beam_impact", 4, Math.floor(nowMs / 90) + i), (i + .5) * W / 6, game.assist.sweep_y + 10);
+        for (let i = 0; i < 7; i += 1) blitArt(artSprite(`jet_${i % 6}`), (i + .5) * W / 7, game.assist.sweep_y + 30);
+        if (Math.floor(nowMs / 200) % 2 === 0) pixelText("ASSIST STRIKE", LO_W / 2, LO_H / 2 - 30, 16, "Y", "center", "R");
+        return;
+      }
       const y = lx(game.assist.sweep_y);
       for (let x = 0; x < LO_W; x += 1) {
         const jitter = (x * 7 + Math.floor(nowMs / 30)) % 5;
@@ -4306,6 +4428,7 @@
       // orange shells with a hot core and a red spark trail.
       const shotColors = ["W", "L", "Y", "C", "O", "O"];
       game.playerBullets.forEach((shot) => {
+        if (blitArt(playerShotArt(shot, nowMs), shot.x, shot.y)) return;
         const x = lx(shot.x);
         const y = lx(shot.y);
         const color = shotColors[shot.level || 0];
@@ -4355,6 +4478,8 @@
         const alpha = Math.max(0, Math.min(1, life / core.PICKUP.fade_s));
         lctx.globalAlpha = Math.ceil(alpha * 4) / 4;
         const bob = Math.round(Math.sin(nowMs / 220 + pickup.x) * 1) * PIXEL;
+        const pickupArt = { shield:"shield_pickup", missile:"gun_pod", weapon:"capsules", wingman:"jet_5" }[pickup.kind];
+        if (pickupArt && blitArt(artSprite(pickupArt), pickup.x, pickup.y + bob)) { lctx.globalAlpha = 1; return; }
         if (pickup.kind === "wingman") blit(sprite("wingman_pickup"), pickup.x, pickup.y + bob);
         else if (pickup.kind === "missile") blit(sprite("missile_pickup", Math.sin(nowMs / 140) > 0 ? "M" : "P"), pickup.x, pickup.y + bob);
         else if (pickup.kind === "bomb") blit(sprite("bomb", Math.sin(nowMs / 160) > 0 ? "O" : "Y"), pickup.x, pickup.y + bob);
@@ -4367,10 +4492,24 @@
 
       const missileTints = ["O", "C", "M", "L"];
       game.playerMissiles.forEach((missile) => {
+        const missileArt = artRotated(game.weaponLevel >= core.WEAPON.swarm_from_level ? "missile_cluster" : "missile_kinetic", missile.heading + Math.PI / 2);
+        if (missileArt) {
+          blitArt(artSprite("smoke_puff"), missile.x - Math.cos(missile.heading) * 12, missile.y - Math.sin(missile.heading) * 12, .5);
+          blit(missileArt, missile.x, missile.y);
+          return;
+        }
         blit(rotatedSprite("missile", missile.heading + Math.PI / 2, missileTints[missile.slot || 0]), missile.x, missile.y);
       });
 
-      if (bombFlash && nowMs < bombFlash.until) {
+      if (bombFlash && nowMs < bombFlash.until && artSprite("massive_explosion")) {
+        const left = (bombFlash.until - nowMs) / 450;
+        const boom = artSprite("massive_explosion");
+        const size = bombFlash.radius * 2 / PIXEL * (1.1 - left * .3);
+        lctx.globalAlpha = Math.min(1, left * 1.6);
+        lctx.drawImage(boom, Math.round(lx(bombFlash.x) - size / 2), Math.round(lx(bombFlash.y) - size / 2), Math.round(size), Math.round(size));
+        lctx.globalAlpha = 1;
+        pixelRing(lx(bombFlash.x), lx(bombFlash.y), bombFlash.radius / PIXEL * (1.15 - left * .15), left > .5 ? "W" : "Y", 1);
+      } else if (bombFlash && nowMs < bombFlash.until) {
         const left = (bombFlash.until - nowMs) / 450;
         const radius = bombFlash.radius * (1.15 - left * .15) / PIXEL;
         const cx = lx(bombFlash.x);
@@ -4389,7 +4528,7 @@
       game.enemies.forEach((enemy) => {
         drawSplashMark(enemy, nowMs);
         if (enemy.type === "boss") {
-          blit(sprite(bossSpriteFor(enemy)), enemy.x, enemy.y);
+          if (!blitArt(enemyArt(enemy), enemy.x, enemy.y)) blit(sprite(bossSpriteFor(enemy)), enemy.x, enemy.y);
           const barX = lx(enemy.x - enemy.w / 2);
           const barY = lx(enemy.y - enemy.h / 2 - 10);
           const barW = lx(enemy.w);
@@ -4398,7 +4537,7 @@
           px(barX, barY, barW, 3, "D");
           px(barX, barY, Math.round(barW * ratio), 3, ratio < .3 ? "R" : "Y");
         } else {
-          blit(sprite(enemySpriteFor(enemy)), enemy.x, enemy.y);
+          if (!blitArt(enemyArt(enemy), enemy.x, enemy.y)) blit(sprite(enemySpriteFor(enemy)), enemy.x, enemy.y);
         }
       });
       blasts.forEach((blast) => drawBlast(blast, nowMs));
@@ -4410,23 +4549,38 @@
         const angle = deg * Math.PI / 180 + game.wingPhase;
         const x = Math.max(6, Math.min(W - 6, game.player.x + Math.cos(angle) * core.WINGMAN.radius));
         const y = Math.max(6, Math.min(H - 6, game.player.y + Math.sin(angle) * core.WINGMAN.radius));
-        blit(rotatedSprite("wingman", angle + Math.PI / 2), x, y);
+        const jetArt = artRotated(`jet_${core.WINGMAN.slot_angles_deg.indexOf(deg) % 4}`, angle + Math.PI / 2);
+        if (jetArt) blit(jetArt, x, y);
+        else blit(rotatedSprite("wingman", angle + Math.PI / 2), x, y);
       });
 
       game.enemyMissiles.forEach((missile) => {
-        blit(rotatedSprite("enemy_missile", missile.heading + Math.PI / 2), missile.x, missile.y);
+        const missileArt = artRotated(["enemy_missile", "missile_emp", "rocket_blue"][idNumber(missile.id) % 3], missile.heading + Math.PI / 2);
+        if (missileArt) blit(missileArt, missile.x, missile.y);
+        else blit(rotatedSprite("enemy_missile", missile.heading + Math.PI / 2), missile.x, missile.y);
         // Armor pips: one per point left (v15).
         for (let i = 0; i < (missile.hp ?? 1); i += 1) px(lx(missile.x) - 3 + i * 3, lx(missile.y) - 7, 2, 1, "G");
       });
 
       (game.bossBombs || []).forEach((shell) => {
         const late = shell.age_s > core.BOSS.big_bomb.fuse_s * .6;
-        blit(sprite("big_bomb", late && blink ? "W" : "R"), shell.x, shell.y);
+        if (!blitArt(artSprite("big_bomb"), shell.x, shell.y, late && blink ? .6 : 1)) blit(sprite("big_bomb", late && blink ? "W" : "R"), shell.x, shell.y);
         if (late) pixelRing(lx(shell.x), lx(shell.y), 9 + (Math.floor(nowMs / 90) % 3), blink ? "Y" : "O", 1);
       });
 
       if (!(game.player.invincible_s > 0 && Math.floor(game.player.invincible_s * 12) % 2 === 0)) {
-        blit(sprite(Math.floor(nowMs / 80) % 2 ? "player_a" : "player_b"), game.player.x, game.player.y);
+        // Gunship art: idle, a muzzle flash while the gun fires, sparks while hit-invulnerable; the heavier hull from
+        // weapon level 3. The afterburner flickers below.
+        const firing = game.playerBullets.some((shot) => shot.wingman === undefined && game.player.y - shot.y < 60);
+        const hull = game.weaponLevel >= 3 ? "player2" : "player";
+        const frame = game.player.invincible_s > 0 ? 4 : firing ? 1 + Math.floor(nowMs / 70) % 2 : 0;
+        const ship = artSprite(`${hull}_${frame}`);
+        if (ship) {
+          if (Math.floor(nowMs / 60) % 3) blitArt(artSprite("afterburner"), game.player.x, game.player.y + 26);
+          blit(ship, game.player.x, game.player.y - 6);
+        } else {
+          blit(sprite(Math.floor(nowMs / 80) % 2 ? "player_a" : "player_b"), game.player.x, game.player.y);
+        }
       }
       drawShields(nowMs);
       drawAssistSweep(nowMs);
@@ -4436,6 +4590,9 @@
       pixelText(`WAVE ${String(game.wave).padStart(2, "0")}`, LO_W - 6, 5, 8, "C", "right");
       for (let i = 0; i < Math.max(0, game.player.lives); i += 1) lctx.drawImage(sprite("player_b"), 6 + i * 15, LO_H - 16);
       for (let i = 0; i < game.bomb.charges; i += 1) lctx.drawImage(sprite("bomb", "O"), LO_W - 18 - i * 14, LO_H - 15);
+      // Weapon heat: the cannon barrel glows hotter with each weapon level (cold, red, orange, firing).
+      const barrel = artSprite(`${game.wingmen > 0 ? "barrel2" : "barrel"}_${[0, 0, 1, 1, 2, 3][game.weaponLevel] ?? 0}`);
+      if (barrel) lctx.drawImage(barrel, LO_W - 18 - 6 * 14 - barrel.width - 4, LO_H - 13);
       for (let i = 0; i < (game.shields || 0); i += 1) lctx.drawImage(sprite("shield_pickup", SHIELD_TINTS[i]), 6 + Math.max(0, game.player.lives) * 15 + 4 + i * 14, LO_H - 15);
       if (game.assist) {
         const ready = game.assist.charges > 0 && game.assist.sweep_y === null;
@@ -4707,6 +4864,7 @@
     // ?autostart=1 skips the intro and starts the autopilot run at once (headless recorders);
     // ?autostart=manual starts a manual run.
     function bootstrap() {
+      loadArt();
       renderGuide("intro-keys");
       renderGuide("guide-keys");
       bindTouchControls();

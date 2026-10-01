@@ -1188,6 +1188,10 @@ func TestPositionQuestionReadsTheSurroundings(t *testing.T) {
 	if !strings.HasPrefix(dense.Get("stay").(string), "Rank 1 HOLD") {
 		t.Errorf("dense, away from walls: %v", dense.Get("stay"))
 	}
+	high := buildPositionCriteria(&SurroundingsFacts{CenterDistancePx: 300, BulletsNear: 14, RadiusPx: 150, WallDistancePx: 120, HeightPx: 120})
+	if !strings.HasPrefix(high.Get("center").(string), "Rank 1 RETURN") || !strings.Contains(high.Get("center").(string), "under the enemy line") {
+		t.Errorf("dense but under the enemy line: %v", high.Get("center"))
+	}
 	walled := buildPositionCriteria(&SurroundingsFacts{CenterDistancePx: 300, BulletsNear: 14, RadiusPx: 150, WallDistancePx: 40})
 	if !strings.HasPrefix(walled.Get("center").(string), "Rank 1 RETURN") {
 		t.Errorf("dense but against a wall: %v", walled.Get("center"))

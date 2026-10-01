@@ -836,6 +836,7 @@ func buildAssistCriteria(facts *AssistFacts, bomb BombFacts, bestTier int) *Orde
 type SurroundingsFacts struct {
 	BulletsNear, EnemiesNear, RadiusPx int64
 	CenterDistancePx, WallDistancePx   float64
+	HeightPx                           float64 // the ship's y (0 = top of the arena); 0 when not reported
 }
 
 func surroundingsFacts(value any) (*SurroundingsFacts, error) {
@@ -852,6 +853,13 @@ func surroundingsFacts(value any) (*SurroundingsFacts, error) {
 			return nil, err
 		}
 	}
+	if _, present := object["height_px"]; present {
+		_, number, err := observedNumber(object, "height_px", "surroundings", false, min0())
+		if err != nil {
+			return nil, err
+		}
+		facts.HeightPx = *number
+	}
 	for key, target := range map[string]*float64{"center_distance_px": &facts.CenterDistancePx, "wall_distance_px": &facts.WallDistancePx} {
 		_, number, err := observedNumber(object, key, "surroundings", false, min0())
 		if err != nil {
@@ -864,8 +872,9 @@ func surroundingsFacts(value any) (*SurroundingsFacts, error) {
 
 // Surroundings thresholds for the position question's ranks.
 const (
-	denseBulletsNear = 10 // bullets within the radius: dodge where you are first
-	nearWallPx       = 90 // closer than this to a wall: the escape directions halve
+	denseBulletsNear = 10  // bullets within the radius: dodge where you are first
+	nearWallPx       = 90  // closer than this to a wall: the escape directions halve
+	enemyLinePx      = 220 // above this height the ship is under the enemy formation: shots arrive with no time to react
 )
 
 // buildPositionCriteria is the separate position decision, asked only while the ship is away from the centre (nil
@@ -883,8 +892,14 @@ func buildPositionCriteria(f *SurroundingsFacts) *OrderedMap {
 	}
 	facts := fmt.Sprintf("%d px from center; %d bullets and %d enemy ships within %d px (%s); nearest wall %d px",
 		int64(f.CenterDistancePx), f.BulletsNear, f.EnemiesNear, f.RadiusPx, density, int64(f.WallDistancePx))
+	high := f.HeightPx > 0 && f.HeightPx < enemyLinePx
+	if high {
+		facts += "; under the enemy line"
+	}
 	criteria := NewOrderedMap()
-	if density != "dense" || f.WallDistancePx < nearWallPx {
+	// v15 run C7 autopsy: every death at half threat came near the top of the arena, holding in a dense field under
+	// the formation. Up there the shots arrive with no time to react, so RETURN ranks first even when it is dense.
+	if density != "dense" || f.WallDistancePx < nearWallPx || high {
 		criteria.Set("stay", "Rank 2 DRIFT: "+facts+"; staying out here leaves fewer ways to escape.")
 		criteria.Set("center", "Rank 1 RETURN: "+facts+"; the next moves head back toward the middle.")
 		return criteria

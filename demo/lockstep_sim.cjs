@@ -20,6 +20,8 @@ const PROFILES = {
   // The old 4/4 slider ceiling, and v2's doubled ceiling.
   max: { bulletDensity: 8, enemyDensity: 6, fastBulletRatio: 1, fastBulletSpeed: 4.8 },
   max2x: { bulletDensity: 16, enemyDensity: 12, fastBulletRatio: 1, fastBulletSpeed: 9.6 },
+  // 50% on every v15 threat slider (each factor halfway through its range).
+  half: { bulletDensity: 8.5, enemyDensity: 6.5, fastBulletRatio: 0.5, fastBulletSpeed: 5.35 },
 };
 
 function parseArgs(argv) {

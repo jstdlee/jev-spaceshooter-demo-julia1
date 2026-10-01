@@ -127,6 +127,22 @@ func (s *Server) Handler() http.Handler {
 				w.Header().Set("Cache-Control", "no-store")
 				w.Header().Set("Access-Control-Allow-Origin", "*")
 				w.Write(page)
+			case "/assets/atlas.png", "/assets/atlas.json":
+				// The sprite atlas built from the raw art (tools/art/build_atlas.py). Only these two fixed files are
+				// served, so no request path ever reaches the file system.
+				name := strings.TrimPrefix(r.URL.Path, "/assets/")
+				data, err := os.ReadFile(filepath.Join(filepath.Dir(s.cfg.HTMLPath), "assets", name))
+				if err != nil {
+					writeJSON(w, http.StatusNotFound, map[string]any{"schema_version": SchemaVersion, "error": "not found"})
+					return
+				}
+				if strings.HasSuffix(name, ".png") {
+					w.Header().Set("Content-Type", "image/png")
+				} else {
+					w.Header().Set("Content-Type", "application/json")
+				}
+				w.Header().Set("Cache-Control", "no-cache")
+				w.Write(data)
 			case "/api/leaderboard":
 				board, err := s.Leaderboard()
 				if err != nil {
