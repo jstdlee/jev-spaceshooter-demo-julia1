@@ -1167,3 +1167,23 @@ func TestPositionBehindDropsATier(t *testing.T) {
 		t.Errorf("a safest move with a worse position: tier %s, want OK", got)
 	}
 }
+
+func TestMountHandlerRoutesByPrefix(t *testing.T) {
+	tag := func(name string) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(name + " " + r.URL.Path)) })
+	}
+	h := mountHandler(tag("root"), []mountedServer{{prefix: "/v2", handler: tag("v2")}})
+	cases := map[string]string{"/": "root /", "/api/decision": "root /api/decision", "/v2/": "v2 /", "/v2/api/decision": "v2 /api/decision", "/v2x": "root /v2x"}
+	for path, want := range cases {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if got := rec.Body.String(); got != want {
+			t.Errorf("%s: %q, want %q", path, got, want)
+		}
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v2?futures=2", nil))
+	if rec.Code != http.StatusMovedPermanently || rec.Header().Get("Location") != "/v2/?futures=2" {
+		t.Errorf("/v2 redirect: %d %q", rec.Code, rec.Header().Get("Location"))
+	}
+}

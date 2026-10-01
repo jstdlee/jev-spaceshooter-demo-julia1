@@ -1255,7 +1255,9 @@
       return (h ^ (h >>> 13)) >>> 0 || 1;
     }
 
-    function sampledFuturesForecast(game, { k = SAMPLED_FUTURES.k, hold_ticks = SAMPLED_FUTURES.hold_ticks, follow_ticks = SAMPLED_FUTURES.follow_ticks, prefix_movement = "hold", prefix_ticks = 0 } = {}) {
+    // One sampled future per call, so the live page can spread the K futures over Web Workers. Returns the raw
+    // per-move counts for that sample, or null when the ship is lost before any new command could land.
+    function sampledFutureSample(game, sample, { hold_ticks = SAMPLED_FUTURES.hold_ticks, follow_ticks = SAMPLED_FUTURES.follow_ticks, prefix_movement = "hold", prefix_ticks = 0 } = {}) {
       const full = hold_ticks + follow_ticks;
       const play = (g, movement, ticks) => {
         const lives = g.player.lives;
@@ -1266,37 +1268,45 @@
         }
         return ticks;
       };
-      const base = serializeGame(game);
-      const out = Object.fromEntries(ACTION_IDS.map((id) => [id, { survived:0, clear:0, end:null }]));
-      let futures = 0;
-      for (let sample = 0; sample < k; sample += 1) {
-        const start = restoreGame(base);
-        start.rng.state = sampledRngState(game.tick, sample);
-        if (play(start, prefix_movement, prefix_ticks) < prefix_ticks) continue;   // lost before any new command lands
-        futures += 1;
-        const afterPrefix = serializeGame(start);
-        for (const id of ACTION_IDS) {
-          const first = restoreGame(afterPrefix);
-          let survived = play(first, id, hold_ticks);
-          if (survived === hold_ticks && follow_ticks > 0) {
-            const mid = serializeGame(first);
-            let best = -1;
-            for (const next of ACTION_IDS) {
-              best = Math.max(best, play(restoreGame(mid), next, follow_ticks));
-              if (best === follow_ticks) break;
-            }
-            survived += best;
+      const start = restoreGame(serializeGame(game));
+      start.rng.state = sampledRngState(game.tick, sample);
+      if (play(start, prefix_movement, prefix_ticks) < prefix_ticks) return null;
+      const afterPrefix = serializeGame(start);
+      const out = {};
+      for (const id of ACTION_IDS) {
+        const first = restoreGame(afterPrefix);
+        let survived = play(first, id, hold_ticks);
+        if (survived === hold_ticks && follow_ticks > 0) {
+          const mid = serializeGame(first);
+          let best = -1;
+          for (const next of ACTION_IDS) {
+            best = Math.max(best, play(restoreGame(mid), next, follow_ticks));
+            if (best === follow_ticks) break;
           }
-          out[id].survived += survived;
-          if (survived === full) out[id].clear += 1;
-          if (!out[id].end) out[id].end = { x:rounded(first.player.x), y:rounded(first.player.y) };
+          survived += best;
         }
+        out[id] = { survived, clear: survived === full, end:{ x:rounded(first.player.x), y:rounded(first.player.y) } };
       }
-      return Object.fromEntries(ACTION_IDS.map((id) => [id, {
-        k, futures, clear:out[id].clear,
-        survival: futures ? Number((out[id].survived / (futures * full)).toFixed(3)) : 0,
-        end: out[id].end,
-      }]));
+      return out;
+    }
+
+    // Merges per-sample results (in sample order; null = a lost future) into the per-move forecast.
+    function mergeSampledFutures(samples, { k = SAMPLED_FUTURES.k, hold_ticks = SAMPLED_FUTURES.hold_ticks, follow_ticks = SAMPLED_FUTURES.follow_ticks } = {}) {
+      const full = hold_ticks + follow_ticks;
+      const live = samples.filter(Boolean);
+      return Object.fromEntries(ACTION_IDS.map((id) => {
+        const survived = live.reduce((sum, sample) => sum + sample[id].survived, 0);
+        return [id, {
+          k, futures:live.length, clear:live.filter((sample) => sample[id].clear).length,
+          survival: live.length ? Number((survived / (live.length * full)).toFixed(3)) : 0,
+          end: live.length ? live[0][id].end : null,
+        }];
+      }));
+    }
+
+    function sampledFuturesForecast(game, config = {}) {
+      const k = config.k ?? SAMPLED_FUTURES.k;
+      return mergeSampledFutures(Array.from({ length:k }, (_, sample) => sampledFutureSample(game, sample, config)), config);
     }
 
     // `detail` adds the short-lease forecast and shot ETAs. No label uses them, and they were half the
@@ -1324,7 +1334,8 @@
       const prefix = forecastPrefix(game, expectedDelayMs, activeCommand, nearby);
       const futuresConfig = context.sampled_futures ? { ...(context.sampled_futures === true ? {} : context.sampled_futures),
         prefix_movement: activeCommand ? activeCommand.movement : "hold", prefix_ticks: Math.round(expectedDelayMs / DT_MS) } : null;
-      const futures = futuresConfig ? sampledFuturesForecast(game, futuresConfig) : null;
+      // The live page computes the samples in Web Workers and passes them in merged; the result is the same.
+      const futures = context.sampled_futures_result || (futuresConfig ? sampledFuturesForecast(game, futuresConfig) : null);
       const candidates = ACTION_IDS.map((id) => {
         const short = detail ? forecastPath(game, id, "short", expectedDelayMs, activeCommand, nearby) : null;
         const medium = forecastPath(game, id, "medium", expectedDelayMs, activeCommand, nearby, detail);
@@ -2312,7 +2323,7 @@
     globalThis.SpaceDecisionCore = Object.freeze({
       ENGINE_VERSION, DT_MS, ACTION_IDS, FIRE_IDS, BOMB_IDS, MISSILE, BOMB, WEAPON, PICKUP, PICKUP_KINDS, EXTRA_LIFE, WINGMAN, BOSS, ENEMY_MISSILE, LEASE_TICKS, LEASE_MS, RULES, DEFAULT_DIFFICULTY, HARDEST_DIFFICULTY, LEGACY_MAX_DIFFICULTY, MAX_DIFFICULTY,
       createGame, stepGame, coordinateAction, stepPolicyTick, observeGame, serializeGame, restoreGame, hashGame, gameStatus,
-      sampledFuturesForecast, SAMPLED_FUTURES, normalizeDifficulty, arenaFor, velocityFor, waveProfile, baseEnemyCountForWave, enemyCountForWave,
+      sampledFuturesForecast, sampledFutureSample, mergeSampledFutures, SAMPLED_FUTURES, normalizeDifficulty, arenaFor, velocityFor, waveProfile, baseEnemyCountForWave, enemyCountForWave,
       fireIntervalForDifficulty, bulletSpeedForDifficulty, rulesManifest, missileCap, bonusMissileCap,
       _private: Object.freeze({ sweptContact, segmentClearance, hostileThreats, stableStringify, rankRouteOptions }),
     });
@@ -2648,6 +2659,62 @@
     let nextRequestAllowedWallMs = 0;
     let difficulty = core.normalizeDifficulty({});
     const isFileProtocol = location.protocol === "file:";
+    // v2 sampled futures (docs/v2). The K futures of each decision are computed in parallel Web Workers, one per
+    // future, so the 60 Hz loop never waits for them; ?futures=0 turns them off, ?futures=2 samples fewer.
+    const FUTURES_K = (() => {
+      const raw = typeof URLSearchParams === "function" ? new URLSearchParams(location.search).get("futures") : null;
+      const k = raw === null ? core.SAMPLED_FUTURES.k : Number(raw);
+      return Number.isInteger(k) && k >= 0 && k <= 8 ? k : core.SAMPLED_FUTURES.k;
+    })();
+    const futuresPool = createFuturesPool(FUTURES_K);
+    let futuresMsHistory = [];
+
+    function createFuturesPool(size) {
+      if (size <= 0 || typeof Worker === "undefined" || isFileProtocol) return null;
+      const coreSource = document.getElementById("space-decision-core")?.textContent;
+      if (!coreSource) return null;
+      const workerSource = coreSource + `
+        self.onmessage = (event) => {
+          const { id, snapshot, sample, config } = event.data;
+          try {
+            const core = self.SpaceDecisionCore;
+            self.postMessage({ id, result:core.sampledFutureSample(core.restoreGame(snapshot), sample, config) });
+          } catch (error) {
+            self.postMessage({ id, error:String(error && error.message || error) });
+          }
+        };`;
+      let url;
+      try {
+        url = URL.createObjectURL(new Blob([workerSource], { type:"text/javascript" }));
+      } catch (error) {
+        return null;
+      }
+      const workers = [];
+      const waiting = new Map();
+      let nextId = 1;
+      for (let i = 0; i < size; i += 1) {
+        const worker = new Worker(url);
+        worker.onmessage = (event) => {
+          const box = waiting.get(event.data.id);
+          if (!box) return;
+          waiting.delete(event.data.id);
+          if (event.data.error) box.reject(new Error(event.data.error));
+          else box.resolve(event.data.result);
+        };
+        workers.push(worker);
+      }
+      return {
+        size,
+        // Resolves with one result per sample, in sample order (null for a future lost before the command lands).
+        run(snapshot, config) {
+          return Promise.all(workers.map((worker, sample) => new Promise((resolve, reject) => {
+            const id = nextId++;
+            waiting.set(id, { resolve, reject });
+            worker.postMessage({ id, snapshot, sample, config });
+          })));
+        },
+      };
+    }
     // Intro (attract) screen: no run, trace, or API call exists until the player picks a mode.
     let introActive = false;
     let guideOpen = false;
@@ -2742,7 +2809,7 @@
       const batch = run.traceQueue.slice(0, 64);
       run.flushPromise = Promise.resolve().then(async () => {
         try {
-          const response = await fetch("/api/run/event", {
+          const response = await fetch("api/run/event", {
             method:"POST",
             headers:{ "Content-Type":"application/json" },
             body:JSON.stringify({ schema_version:1, run_id:run.id, events:batch }),
@@ -3038,7 +3105,7 @@
     async function startTrace(manifest, run) {
       enqueueEvents([{ type:"checkpoint", tick:run.game.tick, wall_ms:wallMs(run), hash:core.hashGame(run.game), checkpoint:core.serializeGame(run.game) }], run);
       try {
-        const response = await fetch("/api/run/start", {
+        const response = await fetch("api/run/start", {
           method:"POST",
           headers:{ "Content-Type":"application/json" },
           body:JSON.stringify(providerChoice ? { schema_version:1, manifest, provider:providerChoice } : { schema_version:1, manifest }),
@@ -3069,6 +3136,14 @@
       if (isFileProtocol) return;
       const run = runState;
       if (!run || run.ending || !autopilot || paused || game.terminal || !runId || controller.pending || run.decisionPromise || wallMs() < nextRequestAllowedWallMs) return;
+      if (futuresPool) {
+        const operation = beginFuturesDecision(run);
+        run.decisionPromise = operation;
+        operation.finally(() => {
+          if (run.decisionPromise === operation) run.decisionPromise = null;
+        });
+        return operation;
+      }
       const observation = currentObservation();
       const checkpoint = core.serializeGame(game);
       const requestBody = djev.beginDecision(controller, {
@@ -3092,6 +3167,46 @@
       return operation;
     }
 
+    // v2: observe a snapshot, let the workers sample its futures while the game keeps running, then ask. The forecast
+    // assumes the command lands after the futures' compute time plus the usual round trip.
+    async function beginFuturesDecision(run) {
+      const snapshot = core.serializeGame(game);
+      const snapshotWall = wallMs();
+      const stats = djev.latencyStats(controller);
+      const active = controllerActiveForObservation();
+      const futuresMs = futuresMsHistory.length ? futuresMsHistory.slice().sort((a, b) => a - b)[Math.floor(futuresMsHistory.length / 2)] : 60;
+      const expectedDelayMs = stats.expected_delay_ms + futuresMs;
+      const config = { k:futuresPool.size, prefix_movement:active ? active.movement : "hold", prefix_ticks:Math.round(expectedDelayMs / core.DT_MS) };
+      const started = performance.now();
+      let samples;
+      try {
+        samples = await futuresPool.run(snapshot, config);
+      } catch (error) {
+        nextRequestAllowedWallMs = wallMs() + 250;
+        return;
+      }
+      futuresMsHistory = futuresMsHistory.concat(performance.now() - started).slice(-8);
+      if (!isCurrentRun(run) || run.ending || !autopilot || paused || game.terminal || controller.pending) return;
+      const observed = core.restoreGame(snapshot);
+      const observation = core.observeGame(observed, {
+        expected_delay_ms:expectedDelayMs,
+        latency_samples:stats.latency_samples,
+        latency_spread_ms:stats.latency_spread_ms,
+        last_intent:controller.lastAppliedIntent,
+        active_command:active,
+        recent_commands:recentCommands.slice(-6),
+        recent_hits:recentHits.slice(-4),
+        sampled_futures_result:core.mergeSampledFutures(samples, config),
+      });
+      const requestBody = djev.beginDecision(controller, { tick:snapshot.tick, wall_ms:snapshotWall, state:observation.state, forecast:observation.forecast, checkpoint:snapshot });
+      if (!requestBody) return;
+      lastObservation = observation;
+      const sequence = requestBody.sequence;
+      enqueueEvents([{ type:"decision_requested", tick:snapshot.tick, wall_ms:snapshotWall, sequence, state:observation.state, forecast:observation.forecast, checkpoint_hash:core.hashGame(observed), futures_ms:Math.round(performance.now() - started) }]);
+      $("request-status").textContent = `pending · E${controller.epoch}/S${sequence}`;
+      return sendDecision(run, requestBody, run.controller.pending);
+    }
+
     async function sendDecision(run, requestBody, pending) {
       const initiatingController = run.controller;
       const sequence = requestBody.sequence;
@@ -3103,7 +3218,7 @@
       const abortController = new AbortController();
       const timeout = setTimeout(() => abortController.abort(), CLIENT_TIMEOUT_MS);
       try {
-        const response = await fetch("/api/decision", {
+        const response = await fetch("api/decision", {
           method:"POST",
           headers:{ "Content-Type":"application/json" },
           body:JSON.stringify(requestBody),
@@ -3177,7 +3292,7 @@
           const drained = await drainTrace(run);
           if (!drained) throw new Error("trace_not_fully_acked");
           terminal.qualification_violations = run.qualification.valid ? [] : [run.qualification.reason];
-          const response = await fetch("/api/run/end", {
+          const response = await fetch("api/run/end", {
             method:"POST",
             headers:{ "Content-Type":"application/json" },
             body:JSON.stringify({ schema_version:1, run_id:run.id, last_event_id:run.nextEventId - 1, terminal }),
@@ -4246,7 +4361,7 @@
 
     async function initProviderSettings() {
       try {
-        const response = await fetch("/api/provider", { cache:"no-store" });
+        const response = await fetch("api/provider", { cache:"no-store" });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         providerInfo = await response.json();
       } catch (error) {

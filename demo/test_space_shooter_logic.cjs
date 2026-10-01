@@ -247,7 +247,9 @@ function browserTransport() {
   let starts = 0;
   const transport = {
     calls, deferStarts: false, deferEvents: false, deferEnds: false,
-    fetch: (route, init) => {
+    fetch: (rawRoute, init) => {
+      // The page calls relative routes (api/...), so it also works under a mount such as /v2/.
+      const route = rawRoute.startsWith('/') ? rawRoute : `/${rawRoute}`;
       const call = { route, body: JSON.parse(init.body), ...deferred() };
       calls.push(call);
       if (route === '/api/run/start') {

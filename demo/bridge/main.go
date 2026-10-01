@@ -181,6 +181,8 @@ func main() {
 	port := flag.Int("port", func() int { p, _ := strconv.Atoi(envOr("SHOOTER_PORT", "7862")); return p }(), "listen port")
 	runsDir := flag.String("runs-dir", "", "trace directory (default <demo-dir>/runs)")
 	upstreamMode := flag.String("upstream", "djev", "djev, or oracle for offline label simulation (no model call)")
+	var mounts mountFlags
+	flag.Var(&mounts, "mount", "serve another demo directory under a path prefix, e.g. /v2=../v2/demo (repeatable)")
 	flag.Parse()
 
 	loadEnvFile(filepath.Join(*demoDir, "..", ".env"))
@@ -210,5 +212,60 @@ func main() {
 	server := NewServer(cfg, upstream)
 	address := net.JoinHostPort(*host, strconv.Itoa(*port))
 	fmt.Printf("Space shooter: http://%s/\n", address)
-	log.Fatal(http.ListenAndServe(address, server.Handler()))
+	handler := server.Handler()
+	var mounted []mountedServer
+	for _, m := range mounts {
+		mcfg := cfg
+		mcfg.HTMLPath = filepath.Join(m.dir, "space-shooter.html")
+		mcfg.StrategyPath = filepath.Join(m.dir, "strategy.md")
+		mcfg.RunsDir = filepath.Join(m.dir, "runs")
+		mounted = append(mounted, mountedServer{prefix: m.prefix, handler: NewServer(mcfg, upstream).Handler()})
+		fmt.Printf("Space shooter: http://%s%s/ (%s)\n", address, m.prefix, m.dir)
+	}
+	log.Fatal(http.ListenAndServe(address, mountHandler(handler, mounted)))
+}
+
+// mountFlags collects --mount prefix=demo-dir values.
+type mountFlags []struct{ prefix, dir string }
+
+func (m *mountFlags) String() string { return fmt.Sprint(*m) }
+
+func (m *mountFlags) Set(value string) error {
+	prefix, dir, ok := strings.Cut(value, "=")
+	prefix = "/" + strings.Trim(prefix, "/")
+	if !ok || prefix == "/" || dir == "" {
+		return fmt.Errorf("--mount wants /prefix=demo-dir, got %q", value)
+	}
+	*m = append(*m, struct{ prefix, dir string }{prefix, dir})
+	return nil
+}
+
+type mountedServer struct {
+	prefix  string
+	handler http.Handler
+}
+
+// mountHandler serves each mounted demo, with its own engine, trace directory and validation, under its prefix:
+// /v2 redirects to /v2/, and /v2/api/decision reaches that demo's /api/decision. The page calls relative routes.
+func mountHandler(root http.Handler, mounts []mountedServer) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for _, m := range mounts {
+			if r.URL.Path == m.prefix {
+				target := m.prefix + "/"
+				if r.URL.RawQuery != "" {
+					target += "?" + r.URL.RawQuery
+				}
+				http.Redirect(w, r, target, http.StatusMovedPermanently)
+				return
+			}
+			if strings.HasPrefix(r.URL.Path, m.prefix+"/") {
+				inner := r.Clone(r.Context())
+				inner.URL.Path = strings.TrimPrefix(r.URL.Path, m.prefix)
+				inner.URL.RawPath = ""
+				m.handler.ServeHTTP(w, inner)
+				return
+			}
+		}
+		root.ServeHTTP(w, r)
+	})
 }
