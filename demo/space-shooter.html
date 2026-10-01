@@ -4569,18 +4569,8 @@
       });
 
       if (!(game.player.invincible_s > 0 && Math.floor(game.player.invincible_s * 12) % 2 === 0)) {
-        // Gunship art: idle, a muzzle flash while the gun fires, sparks while hit-invulnerable; the heavier hull from
-        // weapon level 3. The afterburner flickers below.
-        const firing = game.playerBullets.some((shot) => shot.wingman === undefined && game.player.y - shot.y < 60);
-        const hull = game.weaponLevel >= 3 ? "player2" : "player";
-        const frame = game.player.invincible_s > 0 ? 4 : firing ? 1 + Math.floor(nowMs / 70) % 2 : 0;
-        const ship = artSprite(`${hull}_${frame}`);
-        if (ship) {
-          if (Math.floor(nowMs / 60) % 3) blitArt(artSprite("afterburner"), game.player.x, game.player.y + 26);
-          blit(ship, game.player.x, game.player.y - 6);
-        } else {
-          blit(sprite(Math.floor(nowMs / 80) % 2 ? "player_a" : "player_b"), game.player.x, game.player.y);
-        }
+        // The player's own ship keeps its original "Kestrel" pixel art (the gunship frames stay in the atlas, unused).
+        blit(sprite(Math.floor(nowMs / 80) % 2 ? "player_a" : "player_b"), game.player.x, game.player.y);
       }
       drawShields(nowMs);
       drawAssistSweep(nowMs);
