@@ -14,3 +14,7 @@ B2	label-oracle via bridge, hit-count wording + station core	max2x	1-8	60	60.0	6
 C4	julia-1, hit-count wording + station core	max2x	1-8	60	42.6	15.4	3/8	16	best-tier 93.9%; still drifts (now left/top): within-tier words decide position
 B3	label-oracle, position in the tier (flat-middle station score)	max2x	1-8	60	60.0	60	8/8	0	labels for C5
 C6	julia-1, position in the tier with a linear pull to the centre	max2x	1-8	60	44.8	19.5	4/8	14	worse: best-tier 87.5%, too many moves demoted; reverted
+H0	label-oracle, engine v15 (no local dodge), position question	half	1-8	95	95.0	95	8/8	0	labels sufficient at 50% threat
+H1	julia-1, engine v15, position question (centre)	half	1-8	95	87.6	55.6	6/8	6	deaths under the enemy line, holding in dense fields
+H2	julia-1, + enemy line fact, + pickup question, + edge clamp	half	1-8	95	60.2	21.1	2/8	20	regression: Julia followed "keeps course" a tier down, up into the formation (best-tier 46.8% offline)
+H3	julia-1, + "drifts away from the X" cost wording, + shield-absorbed hits count in the forecast	half	1-8	95	95.0	95	8/8	3	goal met; 142 pickups collected (H1: 96)

@@ -150,3 +150,13 @@ Live at `/v2/` on the julia1 bridge (`bin/bridge --mount /v2=<v2 demo dir>`); ju
 - **Threat level reads 0–100%.** Each slider shows its percentage of its range, and the overall level is their mean.
   100% means every slider is at the doubled ceiling, and the auto-ramp also climbs to 100%.
 - **The event-log detail now works under `/v2/`.** It calls `api/exchange` relative to the page.
+
+### Half threat (50% on every slider), no local dodge
+8 seeds × 95 s, lockstep through the real bridge and Julia-1. Every row is in results.tsv:
+
+| Step | Change | Result |
+| --- | --- | --- |
+| H0 | label oracle | 8/8, 0 hits |
+| H1 | position question (centre) | 6/8, mean 87.6 s |
+| H2 | + enemy-line fact, pickup question, edge clamp | 2/8: Julia followed "keeps course" a tier down, up into the formation |
+| **H3** | **+ "drifts away from the X" on non-target moves, + shield-absorbed hits count in the forecast** | **8/8, 3 hits, 142 pickups** |
