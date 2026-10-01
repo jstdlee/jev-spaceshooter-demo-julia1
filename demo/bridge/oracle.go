@@ -122,6 +122,13 @@ func (oracleUpstream) Call(_ context.Context, body []byte) (*UpstreamResult, err
 	if bomb, ok := payload.Questions["bomb"]; ok {
 		answers["bomb"] = map[string]any{"choice": oracleBomb(bomb.Criteria), "confidence": 1}
 	}
+	if pickup, ok := payload.Questions["pickup"]; ok {
+		choice := "leave"
+		if label, _ := pickup.Criteria["grab"].(string); strings.HasPrefix(label, "Rank 1") {
+			choice = "grab"
+		}
+		answers["pickup"] = map[string]any{"choice": choice, "confidence": 1}
+	}
 	if position, ok := payload.Questions["position"]; ok {
 		choice := "stay"
 		if label, _ := position.Criteria["center"].(string); strings.HasPrefix(label, "Rank 1") {

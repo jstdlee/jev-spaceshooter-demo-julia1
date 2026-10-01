@@ -596,6 +596,8 @@
     const ARMOR = Object.freeze({ bullet:2, boss_bullet:2, missile:3 });
     // v15: the radius the position decision reads the surrounding density in.
     const SURROUNDINGS_RADIUS_PX = 150;
+    // v15: the radius the pickup decision reads the danger around a pickup in.
+    const PICKUP_SURROUNDINGS_PX = 100;
     // Clearing every fifth wave (so waves 6, 11, 16, ... start with it) grants one extra life, up to EXTRA_LIFE.max_lives.
     const EXTRA_LIFE = Object.freeze({ every_waves:5, max_lives:5 });
     // v15 shields: a rare pickup; each shield absorbs one hit (no life or escort jet lost), up to max stacked.
@@ -1500,6 +1502,25 @@
         } : null,
         mission: game.mission ? { text:game.mission.text, progress:game.mission.progress, target:game.mission.target, status:game.mission.status } : null,
         stage_remaining_s: rounded(Math.max(0, STAGE.duration_s - game.waveClock_s)),
+        // v15: the nearest pickup worth having and what is around it, for the model's separate pickup decision (grab it or
+        // leave it). Facts only: whether to go is the model's answer.
+        pickup_target: (() => {
+          const wanted = wantedPickups(game);
+          if (!wanted.length) return null;
+          const dist = (p) => Math.hypot(p.x - game.player.x, p.y - game.player.y);
+          const target = wanted.reduce((best, p) => dist(p) < dist(best) ? p : best);
+          const around = (thing, radius) => Math.hypot(thing.x - target.x, thing.y - target.y) <= radius;
+          return {
+            kind: target.kind,
+            x: rounded(target.x),
+            y: rounded(target.y),
+            distance_px: rounded(dist(target)),
+            bullets_near: game.enemyBullets.filter((b) => around(b, PICKUP_SURROUNDINGS_PX)).length + game.enemyMissiles.filter((m) => around(m, PICKUP_SURROUNDINGS_PX)).length,
+            enemies_near: game.enemies.filter((e) => around(e, PICKUP_SURROUNDINGS_PX * 1.5)).length,
+            radius_px: PICKUP_SURROUNDINGS_PX,
+            seconds_left: rounded(Math.max(0, PICKUP.lifetime_s - target.age_s)),
+          };
+        })(),
         // v15: what is around the ship, for the model's separate position decision (stay, or head back to the centre).
         surroundings: (() => {
           const near = (thing) => Math.hypot(thing.x - game.player.x, thing.y - game.player.y) <= SURROUNDINGS_RADIUS_PX;
@@ -2329,7 +2350,10 @@
         enemy.y += v.vy * DT_SECONDS;
         enemy.x += v.vx * DT_SECONDS;
         if (enemy.type === "boss" && (enemy.x < enemy.w / 2 + 20 || enemy.x > WIDTH - enemy.w / 2 - 20)) enemy.vx = -Math.sign(enemy.x - WIDTH / 2) * BOSS.speed;
-        else if (enemy.x < enemy.w / 2 || enemy.x > WIDTH - enemy.w / 2) enemy.vx *= -1;
+        // Bounce off the side walls: clamp back inside and point inward. Flipping vx alone left a ship that had
+        // overshot the edge flipping every tick, shaking in place (v15 fix).
+        else if (enemy.x < enemy.w / 2) { enemy.x = enemy.w / 2; enemy.vx = Math.abs(enemy.vx); }
+        else if (enemy.x > WIDTH - enemy.w / 2) { enemy.x = WIDTH - enemy.w / 2; enemy.vx = -Math.abs(enemy.vx); }
         if (overlaps(enemy, game.player)) hitPlayer(game, { kind:"enemy", id:enemy.id, x:enemy.x, y:enemy.y, vx:v.vx, vy:v.vy, w:enemy.w, h:enemy.h }, command, events);
         if (enemy.y > HEIGHT + 25) enemy.y = -20;
       });
@@ -3786,7 +3810,7 @@
       });
       const fire = lastApi.fire ? `<div class="ord-cell chosen" style="grid-column:1 / -1;min-height:0"><b>FIRE · ${lastApi.fire}</b>gun ${core.WEAPON.spread_by_level[game.weaponLevel]}-way · missiles · ${game.wingmen} escort jets</div>` : "";
       // v15 triggered questions: position (away from the centre) and the assistance strike (wild field).
-      const extra = [["position", ["stay", "center"]], ["assist", ["hold", "call"]]].flatMap(([name, choices]) => {
+      const extra = [["pickup", ["grab", "leave"]], ["position", ["stay", "center"]], ["assist", ["hold", "call"]]].flatMap(([name, choices]) => {
         const labels = lastApi.labels && lastApi.labels[name];
         if (!labels) return [];
         return choices.map((choice) => {

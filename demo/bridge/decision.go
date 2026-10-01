@@ -26,6 +26,7 @@ var (
 	PickupKinds = []string{"bomb", "weapon", "wingman", "missile", "shield"}
 	AssistIDs   = []string{"hold", "call"}
 	PositionIDs = []string{"stay", "center"}
+	PickupIDs   = []string{"grab", "leave"}
 	PathIDs     = func() []string {
 		ids := make([]string, len(ActionIDs))
 		for i, movement := range ActionIDs {
@@ -76,6 +77,7 @@ const (
 	bombInstructions      = "Pick the choice with rank 1. Collect floating bomb pickups to refill charges."
 	assistInstructions    = "Pick the choice with rank 1. The assistance strike sweeps the whole arena from bottom to top."
 	positionInstructions  = "Pick the choice with rank 1. Center means the next moves head back toward the middle of the arena."
+	pickupInstructions    = "Pick the choice with rank 1. Grab means the next moves head for the pickup."
 	// bombUrgentTier is the best path tier at which the detonate label reports that no safe move exists.
 	bombUrgentTier    = 5
 	intentInstruction = "Classify current intent."
@@ -297,8 +299,9 @@ type PathRow struct {
 	CenterProgress  float64
 	EndX            float64 // v2: where the move leaves the ship (sampled futures), for the station core
 	EndY            float64
-	PositionBehind  bool // v15: the model chose "center" and this safest move makes clearly less progress toward it
-	CenterMode      bool // v15: the model's last position answer was "center" (labels state centre progress)
+	PositionBehind  bool    // v15: a target is chosen (centre or pickup) and this safest move makes clearly less progress toward it
+	Toward          string  // v15: the chosen target's word ("center", "weapon", ...), "" when none
+	TowardProgress  float64 // v15: how much closer to the target the move ends, in px
 	Crowd           int64
 	MoveCollisionMs *float64
 	EscapeOptions   int64
@@ -480,10 +483,11 @@ func futureRow(value any, name string) (*FutureRow, error) {
 	return &FutureRow{Survival: survival, Clear: clear, Futures: futures}, nil
 }
 
-// markCenterBehind applies the model's own "center" answer: among the moves with the highest sampled survival, those
-// that make clearly less progress toward the centre than the best of them drop a tier. Julia follows the tier, not
-// within-tier words, so this is how its position decision reaches its path decision. Nothing happens on "stay".
-func markCenterBehind(rows []PathRow) {
+// markTowardBehind applies the model's own choice of a target, the centre ("center") or a pickup ("grab"): among
+// the moves with the highest sampled survival, those that make clearly less progress toward the target than the
+// best of them drop a tier. Julia follows the tier, not within-tier words, so this is how its position and pickup
+// decisions reach its path decision. Moves below the top survival are never touched.
+func markTowardBehind(rows []PathRow, progress []float64, word string) {
 	best := -1.0
 	for _, row := range rows {
 		if row.Futures != nil && row.Futures.Survival > best {
@@ -494,17 +498,36 @@ func markCenterBehind(rows []PathRow) {
 		return
 	}
 	top := math.Inf(-1)
-	for _, row := range rows {
+	for i, row := range rows {
 		if row.Futures.Survival >= best-1e-9 {
-			top = math.Max(top, row.CenterProgress)
+			top = math.Max(top, progress[i])
 		}
 	}
 	for i := range rows {
-		rows[i].CenterMode = true
-		if rows[i].Futures.Survival >= best-1e-9 && rows[i].CenterProgress < top-centerProgressMinPx {
+		rows[i].Toward, rows[i].TowardProgress = word, progress[i]
+		if rows[i].Futures.Survival >= best-1e-9 && progress[i] < top-centerProgressMinPx {
 			rows[i].PositionBehind = true
 		}
 	}
+}
+
+// markCenterBehind is markTowardBehind for the centre.
+func markCenterBehind(rows []PathRow) {
+	progress := make([]float64, len(rows))
+	for i, row := range rows {
+		progress[i] = row.CenterProgress
+	}
+	markTowardBehind(rows, progress, "center")
+}
+
+// pickupProgress is how much closer each move's sampled end position brings the ship to the pickup.
+func pickupProgress(rows []PathRow, player *packedPlayer, target *PickupTargetFacts) []float64 {
+	progress := make([]float64, len(rows))
+	start := math.Hypot(player.x-target.X, player.y-target.Y)
+	for i, row := range rows {
+		progress[i] = start - math.Hypot(row.EndX-target.X, row.EndY-target.Y)
+	}
+	return progress
 }
 
 // futureTier is the v15 tier: the share of sampled futures a move survives. Walls are not judged here: a move that
@@ -686,19 +709,20 @@ func futureLabel(row PathRow, tier, prefix string) string {
 	if row.Motion == "continues" {
 		parts = append(parts, "keeps course")
 	}
-	if row.CenterMode && row.CenterProgress > centerProgressMinPx {
-		parts = append(parts, "toward center")
+	if row.Toward != "" && row.TowardProgress > centerProgressMinPx {
+		parts = append(parts, "toward "+row.Toward)
 	}
 	return fmt.Sprintf("%s: %s.", prefix, strings.Join(parts, ", "))
 }
 
 // buildPathCriteria returns the path labels and the best (lowest) tier among them.
 func buildPathCriteria(request *DecisionRequest) (*OrderedMap, int, error) {
-	return buildPathCriteriaFor(request, false)
+	return buildPathCriteriaFor(request, "")
 }
 
-// buildPathCriteriaFor builds the path labels; centerMode applies the model's last "center" answer (sampled futures only).
-func buildPathCriteriaFor(request *DecisionRequest, centerMode bool) (*OrderedMap, int, error) {
+// buildPathCriteriaFor builds the path labels. target applies the model's last target answer (sampled futures only):
+// "center" (position question) or "pickup" (pickup question); "" applies none.
+func buildPathCriteriaFor(request *DecisionRequest, target string) (*OrderedMap, int, error) {
 	current, err := activeMovement(request.State["active_command"])
 	if err != nil {
 		return nil, 0, err
@@ -711,8 +735,15 @@ func buildPathCriteriaFor(request *DecisionRequest, centerMode bool) (*OrderedMa
 	if err != nil {
 		return nil, 0, err
 	}
-	if centerMode && len(rows) > 0 && rows[0].Futures != nil {
-		markCenterBehind(rows)
+	if len(rows) > 0 && rows[0].Futures != nil {
+		switch target {
+		case "center":
+			markCenterBehind(rows)
+		case "pickup":
+			if facts, err := pickupTargetFacts(request.State["pickup_target"]); err == nil && facts != nil {
+				markTowardBehind(rows, pickupProgress(rows, player, facts), facts.Kind)
+			}
+		}
 	}
 	criteria := NewOrderedMap()
 	best := len(pathTiers)
@@ -870,6 +901,97 @@ func surroundingsFacts(value any) (*SurroundingsFacts, error) {
 	return &facts, nil
 }
 
+// PickupTargetFacts is the validated state.pickup_target observation (engine v15): the nearest pickup worth having.
+type PickupTargetFacts struct {
+	Kind                               string
+	X, Y, DistancePx, SecondsLeft      float64
+	BulletsNear, EnemiesNear, RadiusPx int64
+}
+
+func pickupTargetFacts(value any) (*PickupTargetFacts, error) {
+	if value == nil {
+		return nil, nil
+	}
+	object, err := requireObject(value, "pickup_target")
+	if err != nil {
+		return nil, err
+	}
+	kind, _, err := enumValue(object["kind"], "pickup_target.kind", PickupKinds, false)
+	if err != nil {
+		return nil, err
+	}
+	facts := PickupTargetFacts{Kind: kind}
+	for key, target := range map[string]*float64{"x": &facts.X, "y": &facts.Y, "distance_px": &facts.DistancePx, "seconds_left": &facts.SecondsLeft} {
+		_, number, err := observedNumber(object, key, "pickup_target", false, nil)
+		if err != nil {
+			return nil, err
+		}
+		*target = *number
+	}
+	for key, target := range map[string]*int64{"bullets_near": &facts.BulletsNear, "enemies_near": &facts.EnemiesNear, "radius_px": &facts.RadiusPx} {
+		if *target, err = nonnegativeInt(object[key], "pickup_target."+key); err != nil {
+			return nil, err
+		}
+	}
+	return &facts, nil
+}
+
+// Pickup question thresholds.
+const (
+	pickupReachPx       = 360 // asked only for a pickup this close
+	pickupMinSeconds    = 1.5 // ... with this long left before it fades
+	pickupHotBullets    = 5   // more bullets than this around it: too hot
+	pickupHotEnemies    = 1   // more enemy ships than this around it: too hot
+	pickupAnswerSeconds = 1.5 // a "grab" answer holds this long
+)
+
+// buildPickupCriteria is the separate pickup decision, asked while a wanted pickup is within reach (nil otherwise:
+// leave it). Facts: what it is, how far, how long it lasts, what is around it, and whether a move toward it is safe in
+// every sampled future. GRAB ranks first when that move is safe and the pickup is not surrounded; it is the model's
+// answer that sends the ship (through the path tiers), never a local rule.
+func buildPickupCriteria(request *DecisionRequest) *OrderedMap {
+	facts, err := pickupTargetFacts(request.State["pickup_target"])
+	if err != nil || facts == nil || facts.DistancePx > pickupReachPx || facts.SecondsLeft < pickupMinSeconds {
+		return nil
+	}
+	player, err := packPlayer(request.State["player"])
+	if err != nil {
+		return nil
+	}
+	current, _ := activeMovement(request.State["active_command"])
+	rows, err := pathTable(request.Forecast["candidates"], player, current)
+	if err != nil || len(rows) == 0 || rows[0].Futures == nil {
+		return nil
+	}
+	progress := pickupProgress(rows, player, facts)
+	safeToward := false
+	for i, row := range rows {
+		if progress[i] > centerProgressMinPx && row.Futures.Survival >= 0.999 {
+			safeToward = true
+		}
+	}
+	name := facts.Kind
+	if name == "wingman" {
+		name = "escort jet"
+	}
+	about := fmt.Sprintf("%s pickup %d px away, %.0f s left; %d bullets and %d enemy ships around it",
+		name, int64(facts.DistancePx), facts.SecondsLeft, facts.BulletsNear, facts.EnemiesNear)
+	hot := facts.BulletsNear > pickupHotBullets || facts.EnemiesNear > pickupHotEnemies
+	criteria := NewOrderedMap()
+	switch {
+	case safeToward && !hot:
+		criteria.Set("grab", fmt.Sprintf("Rank 1 GRAB: %s; a move toward it is safe in all %d futures.", about, rows[0].Futures.Futures))
+		criteria.Set("leave", fmt.Sprintf("Rank 2 LEAVE: %s; letting it fade gives up the %s.", about, name))
+	case !safeToward:
+		criteria.Set("grab", fmt.Sprintf("Rank 2 GRAB: %s; every move toward it risks a hit.", about))
+		criteria.Set("leave", fmt.Sprintf("Rank 1 LEAVE: %s; no safe way to it now.", about))
+	default:
+		criteria.Set("grab", fmt.Sprintf("Rank 2 GRAB: %s; too hot around it.", about))
+		criteria.Set("leave", fmt.Sprintf("Rank 1 LEAVE: %s; wait until it is clear.", about))
+	}
+	return criteria
+}
+
 // Surroundings thresholds for the position question's ranks.
 const (
 	denseBulletsNear = 10  // bullets within the radius: dodge where you are first
@@ -1000,6 +1122,13 @@ func buildUpstreamPayload(model, promptText string, packed, pathCriteria, bombCr
 			Set("path", path).
 			Set("fire", question(fireInstructions, choiceCriteria(FireIDs, FireDescriptions))).
 			Set("bomb", bomb))
+	if len(positionCriteria) > 1 && positionCriteria[1] != nil {
+		pickup := question(pickupInstructions, positionCriteria[1])
+		if flavor == "julia" {
+			pickup.Set("option_questions", bombOptionQuestions())
+		}
+		payload.Get("questions").(*OrderedMap).Set("pickup", pickup)
+	}
 	if len(positionCriteria) > 0 && positionCriteria[0] != nil {
 		position := question(positionInstructions, positionCriteria[0])
 		if flavor == "julia" {
@@ -1124,15 +1253,20 @@ func normalizeDecisionResponse(response any, asked ...bool) map[string]any {
 	if len(asked) > 1 && asked[1] {
 		position = extractAnswer(response, "position", PositionIDs)
 	}
+	// The pickup question is only asked with a wanted pickup in reach; unasked, the ship leaves it.
+	pickup := answer{choice: "leave"}
+	if len(asked) > 2 && asked[2] {
+		pickup = extractAnswer(response, "pickup", PickupIDs)
+	}
 	var errors []string
-	for _, item := range []answer{intent, path, fire, bomb, assist, position} {
+	for _, item := range []answer{intent, path, fire, bomb, assist, position, pickup} {
 		if item.err != "" {
 			errors = append(errors, item.err)
 		}
 	}
 	if len(errors) > 0 {
 		return map[string]any{
-			"intent": nil, "movement": nil, "fire": nil, "lease": nil, "bomb": nil, "assist": nil, "position": nil, "valid_choice": false,
+			"intent": nil, "movement": nil, "fire": nil, "lease": nil, "bomb": nil, "assist": nil, "position": nil, "pickup": nil, "valid_choice": false,
 			"confidence": nullConfidence(), "error": strings.Join(errors, ","),
 		}
 	}
@@ -1145,6 +1279,7 @@ func normalizeDecisionResponse(response any, asked ...bool) map[string]any {
 		"bomb":         bomb.choice,
 		"assist":       assist.choice,
 		"position":     position.choice,
+		"pickup":       pickup.choice,
 		"valid_choice": true,
 		"confidence": map[string]any{
 			"intent": intent.confidence, "path": path.confidence, "movement": path.confidence,

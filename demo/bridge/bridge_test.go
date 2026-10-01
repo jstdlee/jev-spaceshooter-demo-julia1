@@ -1304,3 +1304,52 @@ func TestLeaderboardRanksFinishedRunsOnce(t *testing.T) {
 		t.Fatalf("board %+v", entries)
 	}
 }
+
+func TestPickupQuestionAndGrabAnswer(t *testing.T) {
+	ends := map[string][2]float64{"hold": {480, 408}, "left": {452, 408}, "right": {508, 408}, "up": {480, 380}, "down": {480, 436},
+		"up_left": {460, 388}, "up_right": {500, 388}, "down_left": {460, 428}, "down_right": {500, 428}}
+	build := func(survival map[string]float64, bullets int) *DecisionRequest {
+		body := decisionBody(t, "pickup-question")
+		for i, movement := range ActionIDs {
+			s := 1.0
+			if v, ok := survival[movement]; ok {
+				s = v
+			}
+			clear := int64(4)
+			if s < 1 {
+				clear = 2
+			}
+			medium(body, i)["futures"] = map[string]any{"k": json.Number("4"), "futures": json.Number("4"), "clear": json.Number(fmt.Sprint(clear)),
+				"survival": json.Number(fmt.Sprint(s)), "end": map[string]any{"x": json.Number(fmt.Sprint(ends[movement][0])), "y": json.Number(fmt.Sprint(ends[movement][1]))}}
+		}
+		body["state"].(map[string]any)["pickup_target"] = map[string]any{"kind": "weapon", "x": json.Number("480"), "y": json.Number("250"),
+			"distance_px": json.Number("158"), "seconds_left": json.Number("9"), "bullets_near": json.Number(fmt.Sprint(bullets)),
+			"enemies_near": json.Number("0"), "radius_px": json.Number("100")}
+		return requestFor(t, body)
+	}
+	if c := buildPickupCriteria(build(nil, 2)); c == nil || !strings.HasPrefix(c.Get("grab").(string), "Rank 1 GRAB") {
+		t.Fatalf("safe and clear: %v", c)
+	}
+	if c := buildPickupCriteria(build(nil, 9)); !strings.HasPrefix(c.Get("leave").(string), "Rank 1 LEAVE") {
+		t.Fatalf("too hot: %v", c.Get("leave"))
+	}
+	unsafe := map[string]float64{"up": 0.5, "up_left": 0.5, "up_right": 0.5}
+	if c := buildPickupCriteria(build(unsafe, 2)); !strings.HasPrefix(c.Get("leave").(string), "Rank 1 LEAVE") {
+		t.Fatalf("no safe way: %v", c.Get("leave"))
+	}
+	// A grab answer shapes the next path tiers: moves toward the pickup stay GOOD, the others drop to OK.
+	criteria, _, err := buildPathCriteriaFor(build(nil, 2), "pickup")
+	must(t, err)
+	if got := criteria.Get("up__medium"); !strings.HasPrefix(got.(string), "Tier 1 GOOD") || !strings.Contains(got.(string), "toward weapon") {
+		t.Errorf("toward the pickup: %q", got)
+	}
+	if got := criteria.Get("down__medium"); !strings.HasPrefix(got.(string), "Tier 2 OK") {
+		t.Errorf("away from the pickup: %q", got)
+	}
+	// Without the answer, the pickup does not touch the path tiers.
+	criteria, _, err = buildPathCriteriaFor(build(nil, 2), "")
+	must(t, err)
+	if got := criteria.Get("down__medium"); !strings.HasPrefix(got.(string), "Tier 1 GOOD") {
+		t.Errorf("no answer, no effect: %q", got)
+	}
+}

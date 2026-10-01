@@ -55,6 +55,7 @@ S = {}
 
 # Rim colours: a light, team-coloured outline makes small art pop on the dark starfield and tells friend from foe.
 RIM = {"ally": (0, 216, 255), "enemy": (255, 64, 96), "boss": (255, 63, 210), "item": (255, 226, 61)}
+RIMS = False  # team-coloured outlines (off: they looked like a shiny edge)
 SCALE = 1.2   # on-screen size relative to the hitbox-sized boxes below (the hitboxes themselves do not change)
 
 
@@ -64,7 +65,8 @@ def add(name, sheet, box, mode, rot, size, colors=14, outline=False, inset=8):
         team = "boss" if name.startswith("boss") else "ally" if name.startswith(("player", "jet", "gun_pod", "capsules")) else "enemy"
     if mode == "flat" and outline:
         size = (round(size[0] * SCALE), round(size[1] * SCALE))
-    S[name] = (sheet, box, mode, rot, size, colors, team, inset)
+    # No rim: the coloured outlines read as a shiny edge. The vivid colours carry the contrast instead.
+    S[name] = (sheet, box, mode, rot, size, colors, team if RIMS else None, inset)
 
 
 # Player gunship (nose up, as in the game) and its firing frames.

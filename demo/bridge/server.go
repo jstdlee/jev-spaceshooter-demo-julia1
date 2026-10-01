@@ -66,13 +66,22 @@ type RunState struct {
 	// decisions' path tiers for positionAnswerSeconds; "stay" or an expired answer leaves them alone.
 	positionMode string
 	positionAt   time.Time
+	// v15: the model's last answer to the pickup question; "grab" holds for pickupAnswerSeconds and outranks "center".
+	pickupMode string
+	pickupAt   time.Time
 }
 
-// centerActive reports whether the model's last position answer was "center" and is still in force.
-func (r *RunState) centerActive() bool {
+// target is the target the model's last answers put in force: "pickup", "center" or "".
+func (r *RunState) target() string {
 	r.eventMu.Lock()
 	defer r.eventMu.Unlock()
-	return r.positionMode == "center" && time.Since(r.positionAt).Seconds() < positionAnswerSeconds
+	if r.pickupMode == "grab" && time.Since(r.pickupAt).Seconds() < pickupAnswerSeconds {
+		return "pickup"
+	}
+	if r.positionMode == "center" && time.Since(r.positionAt).Seconds() < positionAnswerSeconds {
+		return "center"
+	}
+	return ""
 }
 
 func (run *RunState) identity() map[string]any {
@@ -346,7 +355,7 @@ func (s *Server) StartRun(body any) (map[string]any, error) {
 func nullDecision(request *DecisionRequest, id string, apiOK bool, errText string, latencyMs float64) map[string]any {
 	return map[string]any{
 		"schema_version": SchemaVersion, "run_id": request.RunID, "epoch": request.Epoch, "sequence": request.Sequence,
-		"decision_id": id, "intent": nil, "movement": nil, "fire": nil, "lease": nil, "bomb": nil, "assist": nil, "position": nil,
+		"decision_id": id, "intent": nil, "movement": nil, "fire": nil, "lease": nil, "bomb": nil, "assist": nil, "position": nil, "pickup": nil,
 		"valid_choice": false, "api_ok": apiOK, "error": errText, "latency_ms": round(latencyMs, 1),
 		"usage":      map[string]any{"input_tokens": nil, "output_tokens": nil},
 		"confidence": nullConfidence(), "api_token_throughput": nil,
@@ -384,7 +393,7 @@ func (s *Server) HandleDecision(ctx context.Context, body any) (map[string]any, 
 	receivedMono := s.monotonicMs()
 	tokenBudget := map[string]any{"packed_state_chars": nil, "tokenizer": "unavailable", "max_model_len": MaxModelLen, "reserved_output_tokens": ReservedOutputTokens}
 
-	criteria, bestTier, err := buildPathCriteriaFor(request, run.centerActive())
+	criteria, bestTier, err := buildPathCriteriaFor(request, run.target())
 	var packed *OrderedMap
 	var bomb BombFacts
 	var assist *AssistFacts
@@ -430,7 +439,8 @@ func (s *Server) HandleDecision(ctx context.Context, body any) (map[string]any, 
 	bombCriteria := buildBombCriteria(bomb, bestTier)
 	assistCriteria := buildAssistCriteria(assist, bomb, bestTier)
 	positionCriteria := buildPositionCriteria(surroundings)
-	payload := buildUpstreamPayload(fmt.Sprint(identity["configured_model"]), run.PromptText, packed, criteria, bombCriteria, assistCriteria, run.provider.Flavor, positionCriteria)
+	pickupCriteria := buildPickupCriteria(request)
+	payload := buildUpstreamPayload(fmt.Sprint(identity["configured_model"]), run.PromptText, packed, criteria, bombCriteria, assistCriteria, run.provider.Flavor, positionCriteria, pickupCriteria)
 	// The exact wire bytes are logged before transport and reused for the request itself.
 	wire, err := marshalCompact(payload)
 	if err != nil {
@@ -491,7 +501,7 @@ func (s *Server) HandleDecision(ctx context.Context, body any) (map[string]any, 
 	apiOK := upstream.Status != nil && *upstream.Status >= 200 && *upstream.Status < 300 && upstream.Error == nil
 	var normalized map[string]any
 	if apiOK {
-		normalized = normalizeDecisionResponse(upstream.Parsed, assistCriteria != nil, positionCriteria != nil)
+		normalized = normalizeDecisionResponse(upstream.Parsed, assistCriteria != nil, positionCriteria != nil, pickupCriteria != nil)
 	} else {
 		errText := ""
 		if upstream.Error != nil {
@@ -499,7 +509,7 @@ func (s *Server) HandleDecision(ctx context.Context, body any) (map[string]any, 
 		} else if upstream.Status != nil {
 			errText = fmt.Sprintf("upstream_status_%d", *upstream.Status)
 		}
-		normalized = map[string]any{"intent": nil, "movement": nil, "fire": nil, "lease": nil, "bomb": nil, "assist": nil, "position": nil, "valid_choice": false, "confidence": nullConfidence(), "error": errText}
+		normalized = map[string]any{"intent": nil, "movement": nil, "fire": nil, "lease": nil, "bomb": nil, "assist": nil, "position": nil, "pickup": nil, "valid_choice": false, "confidence": nullConfidence(), "error": errText}
 	}
 	if parsed, ok := upstream.Parsed.(map[string]any); ok {
 		if model, ok := parsed["model"].(string); ok {
@@ -516,7 +526,7 @@ func (s *Server) HandleDecision(ctx context.Context, body any) (map[string]any, 
 	result := map[string]any{
 		"schema_version": SchemaVersion, "run_id": run.RunID, "epoch": request.Epoch, "sequence": request.Sequence,
 		"decision_id": id, "intent": normalized["intent"], "movement": normalized["movement"],
-		"fire": normalized["fire"], "lease": normalized["lease"], "bomb": normalized["bomb"], "assist": normalized["assist"], "position": normalized["position"], "valid_choice": normalized["valid_choice"],
+		"fire": normalized["fire"], "lease": normalized["lease"], "bomb": normalized["bomb"], "assist": normalized["assist"], "position": normalized["position"], "pickup": normalized["pickup"], "valid_choice": normalized["valid_choice"],
 		"api_ok": apiOK, "error": normalized["error"], "latency_ms": round(upstream.ElapsedS*1000, 1),
 		"usage": usage, "confidence": normalized["confidence"], "api_token_throughput": throughput,
 		// The exact labels Djev chose from, so the page can show the decision as the model saw it.
@@ -528,6 +538,9 @@ func (s *Server) HandleDecision(ctx context.Context, body any) (map[string]any, 
 	if positionCriteria != nil {
 		result["labels"].(map[string]any)["position"] = positionCriteria
 	}
+	if pickupCriteria != nil {
+		result["labels"].(map[string]any)["pickup"] = pickupCriteria
+	}
 	// Remember the position answer: an asked "center" holds for the next decisions; outside the trigger area the
 	// question is not asked and the ship is back near the centre, so the mode resets to stay.
 	if normalized["valid_choice"] == true {
@@ -537,6 +550,12 @@ func (s *Server) HandleDecision(ctx context.Context, body any) (map[string]any, 
 			run.positionAt = time.Now()
 		} else {
 			run.positionMode = "stay"
+		}
+		if pickupCriteria != nil {
+			run.pickupMode, _ = normalized["pickup"].(string)
+			run.pickupAt = time.Now()
+		} else {
+			run.pickupMode = "leave"
 		}
 		run.eventMu.Unlock()
 	}
