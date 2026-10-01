@@ -160,3 +160,43 @@ Live at `/v2/` on the julia1 bridge (`bin/bridge --mount /v2=<v2 demo dir>`); ju
 | H1 | position question (centre) | 6/8, mean 87.6 s |
 | H2 | + enemy-line fact, pickup question, edge clamp | 2/8: Julia followed "keeps course" a tier down, up into the formation |
 | **H3** | **+ "drifts away from the X" on non-target moves, + shield-absorbed hits count in the forecast** | **8/8, 3 hits, 142 pickups** |
+
+### Pickups are a model decision too
+- **A separate `pickup` question** (grab / leave) is asked while a wanted pickup is within 360 px and has at least 1.5 s
+  left. The facts:
+  - kind, distance and time left;
+  - bullets within 100 px of it, and enemy ships within 150 px;
+  - whether a move toward it is safe in every sampled future.
+- **Ranking:** GRAB ranks first when a safe move toward the pickup exists, at most 5 bullets are around it, and at most
+  1 enemy ship.
+- **A `grab` answer holds for 1.5 s and outranks `center`.** The safest moves heading for the pickup stay on top
+  ("toward weapon"). The other safe moves say "drifts away from the weapon" and drop "keeps course".
+- **Forecast fix:** a hit that a shield absorbs counts as a hit. Before, shielded moves into bullets looked safe, and a
+  fresh shield was spent at once.
+
+### Art and visuals
+- **Art pipeline:**
+  - `tools/art/segment.py` finds the sprites on a raw sheet.
+  - `tools/art/build_atlas.py <rawarts> demo/assets` cuts 142 sprites from all 29 sheets in `rawarts/`, which is not
+    in git: key out the background, trim, rotate, fit to the retro pixel scale (about 1.2× the hitbox, which never
+    changes), brighten colours, and use a small palette without dithering.
+  - The result is `demo/assets/atlas.png` and `atlas.json`, served by the bridge at `assets/atlas.*`.
+- **What uses the art:**
+  - escort jets; stealth, Dart, Wasp, Hornet, Crab and turret enemies; 13 boss designs;
+  - plasma rounds and orbs; acid and red-bolt enemy fire; micro-missiles with smoke;
+  - explosions and the ship-destruction sequence; the bomb blast;
+  - blue and hex shield bubbles; the beam strike; the weapon-heat barrel.
+  - The player keeps its original Kestrel pixel art. The pixel maps remain the fallback when the atlas is not loaded.
+- **Pickups are badges:** a dark disc, a ring coloured by kind, and an icon, drawn at full canvas resolution with a
+  slow per-pickup float and a continuous fade.
+- **Enemy edge bounce:** an enemy that reaches a side wall is clamped back inside and pointed inward. Flipping its
+  velocity alone left an overshot ship jittering in place.
+- **Ranking board:** after a death, enter a name. Runs rank by time, then score; the columns are aligned.
+- **Threat level:** each slider reads 0–100% of its range, and the overall level is their mean.
+
+### Open issues (current)
+- **Live play is untested:** lockstep runs use a 30 ms round trip, while live play adds the forecast's compute time.
+  The four futures run in parallel Web Workers, but live survival has not been measured.
+- **Fire is constant, and the bomb question is asked even with nothing to detonate.** Both could stop being asked.
+- **The strategy-regression test needs `go` on the PATH** (`~/sdk/go/bin`). Without it, it fails with
+  `spawn go ENOENT`.

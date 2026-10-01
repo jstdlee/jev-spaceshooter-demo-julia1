@@ -13,6 +13,21 @@ game on a self-hosted 26B djev-spark endpoint. That repo stays untouched; this o
 
 ![Julia 1 flying all four difficulty levels at once (1/3, 1/2, 3/4, 4/4, left to right and top to bottom)](docs/media/julia1/preview-all-difficulties.gif)
 
+## v2 branch: doubled difficulty, no local dodge
+
+This branch (`v2`) doubles every difficulty ceiling and moves every decision to the model. Changes:
+- **Engine v15:** shields, an assistance strike, armored enemy shots, harder bosses, 3-minute stages with missions,
+  and a ranking board.
+- **Decisions:** a sampled-futures forecast, plus separate position, pickup and strike decisions.
+- **Visuals:** new art, cut from the raw sheets.
+- **No local dodge or override code remains.**
+
+The full log of method, experiments and results is in [docs/v2/README.md](docs/v2/README.md) and
+[docs/v2/results.tsv](docs/v2/results.tsv). At 50% on every threat slider, Julia 1 survives 95 s on 8/8 lockstep seeds.
+
+Run it next to the original: `bin/bridge --port 7866 --demo-dir demo --mount /v2=<v2 checkout>/demo`, then open
+`/v2/`.
+
 ## Demo videos
 
 Real-time recordings, 1200×1200, autopilot only (no manual input, auto ramp off). Each difficulty level sets all four
