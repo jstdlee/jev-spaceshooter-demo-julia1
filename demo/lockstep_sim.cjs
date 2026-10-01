@@ -17,6 +17,9 @@ const PROFILES = {
   ...BENCHMARK_PROFILES,
   // The settings from the browser runs that motivated this harness.
   'browser-hard': { bulletDensity: 3.5, enemyDensity: 2.75, fastBulletRatio: 0.7, fastBulletSpeed: 2.2 },
+  // The old 4/4 slider ceiling, and v2's doubled ceiling.
+  max: { bulletDensity: 8, enemyDensity: 6, fastBulletRatio: 1, fastBulletSpeed: 4.8 },
+  max2x: { bulletDensity: 16, enemyDensity: 12, fastBulletRatio: 1, fastBulletSpeed: 9.6 },
 };
 
 function parseArgs(argv) {

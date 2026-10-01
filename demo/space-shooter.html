@@ -374,10 +374,10 @@
         <div class="section threat" id="decision-panel">
           <h2>Threat level <button type="button" id="auto-ramp-button" aria-pressed="true" title="In autopilot, raise all threat sliders a little every 20 s of mission time (about 8 minutes to max)">Auto ramp: ON</button></h2>
           <div class="tuning-grid">
-            <label class="slider-row"><span>Bullet density</span><input id="bullet-density" type="range" min="1" max="8" step="0.25" value="1" /><b id="bullet-density-value">1.00x</b></label>
-            <label class="slider-row"><span>Enemy density</span><input id="enemy-density" type="range" min="1" max="6" step="0.25" value="1" /><b id="enemy-density-value">1.00x</b></label>
+            <label class="slider-row"><span>Bullet density</span><input id="bullet-density" type="range" min="1" max="16" step="0.25" value="1" /><b id="bullet-density-value">1.00x</b></label>
+            <label class="slider-row"><span>Enemy density</span><input id="enemy-density" type="range" min="1" max="12" step="0.25" value="1" /><b id="enemy-density-value">1.00x</b></label>
             <label class="slider-row"><span>Fast bullets</span><input id="fast-bullet-ratio" type="range" min="0" max="1" step="0.05" value="0" /><b id="fast-bullet-ratio-value">0%</b></label>
-            <label class="slider-row"><span>Fast speed</span><input id="fast-bullet-speed" type="range" min="1.1" max="4.8" step="0.1" value="1.6" /><b id="fast-bullet-speed-value">1.60x</b></label>
+            <label class="slider-row"><span>Fast speed</span><input id="fast-bullet-speed" type="range" min="1.1" max="9.6" step="0.1" value="1.6" /><b id="fast-bullet-speed-value">1.60x</b></label>
           </div>
         </div>
       </div>
@@ -473,7 +473,7 @@
   (() => {
     "use strict";
 
-    const ENGINE_VERSION = "space-decision-core-v13";
+    const ENGINE_VERSION = "space-decision-core-v14";
     const DT_MS = 1000 / 60;
     const DT_SECONDS = 1 / 60;
     const WIDTH = 960;
@@ -501,6 +501,10 @@
     const DIRECTIONS = Object.freeze({ hold:[0,0], left:[-1,0], right:[1,0], up:[0,-1], down:[0,1], up_left:[-1,-1], up_right:[1,-1], down_left:[-1,1], down_right:[1,1] });
     const DEFAULT_DIFFICULTY = Object.freeze({ bulletDensity:1, enemyDensity:1, fastBulletRatio:0, fastBulletSpeed:1.6 });
     const HARDEST_DIFFICULTY = Object.freeze({ bulletDensity:4, enemyDensity:3, fastBulletRatio:.85, fastBulletSpeed:2.4 });
+    // v2 doubled every slider ceiling (bullets 8→16, enemies 6→12, fast speed 4.8→9.6; the ratio was already 100%).
+    // Settings at or below the old ceilings behave exactly as before; caps and floors only stretch above them.
+    const LEGACY_MAX_DIFFICULTY = Object.freeze({ bulletDensity:8, enemyDensity:6, fastBulletRatio:1, fastBulletSpeed:4.8 });
+    const MAX_DIFFICULTY = Object.freeze({ bulletDensity:16, enemyDensity:12, fastBulletRatio:1, fastBulletSpeed:9.6 });
     const PRNG_VERSION = "xorshift32-v1";
     // Homing missiles launch automatically while a Djev command authorizes the gun.
     // Missile cap grows with weapon level (max_active + WEAPON.missile_cap_bonus_by_level): 4, 5, 6, 6, 6, 8 at levels 0-5.
@@ -578,10 +582,10 @@
 
     function normalizeDifficulty(input = {}) {
       return {
-        bulletDensity: rounded(clamp(finite(input.bulletDensity, DEFAULT_DIFFICULTY.bulletDensity), 1, 8), 2),
-        enemyDensity: rounded(clamp(finite(input.enemyDensity, DEFAULT_DIFFICULTY.enemyDensity), 1, 6), 2),
+        bulletDensity: rounded(clamp(finite(input.bulletDensity, DEFAULT_DIFFICULTY.bulletDensity), 1, MAX_DIFFICULTY.bulletDensity), 2),
+        enemyDensity: rounded(clamp(finite(input.enemyDensity, DEFAULT_DIFFICULTY.enemyDensity), 1, MAX_DIFFICULTY.enemyDensity), 2),
         fastBulletRatio: rounded(clamp(finite(input.fastBulletRatio, DEFAULT_DIFFICULTY.fastBulletRatio), 0, 1), 3),
-        fastBulletSpeed: rounded(clamp(finite(input.fastBulletSpeed, DEFAULT_DIFFICULTY.fastBulletSpeed), 1.1, 4.8), 2),
+        fastBulletSpeed: rounded(clamp(finite(input.fastBulletSpeed, DEFAULT_DIFFICULTY.fastBulletSpeed), 1.1, MAX_DIFFICULTY.fastBulletSpeed), 2),
       };
     }
 
@@ -644,13 +648,15 @@
 
     function enemyCountForWave(wave, profile = waveProfile(wave), difficulty = DEFAULT_DIFFICULTY) {
       const settings = normalizeDifficulty(difficulty);
-      const cap = profile.enemyType === "tank" ? 18 : profile.enemyType === "swarm" ? 60 : 42;
+      const stretch = Math.max(1, settings.enemyDensity / LEGACY_MAX_DIFFICULTY.enemyDensity);
+      const cap = Math.round((profile.enemyType === "tank" ? 18 : profile.enemyType === "swarm" ? 60 : 42) * stretch);
       return Math.max(1, Math.min(cap, Math.round(baseEnemyCountForWave(wave, profile) * settings.enemyDensity)));
     }
 
     function fireIntervalForDifficulty(difficulty = DEFAULT_DIFFICULTY) {
       const settings = normalizeDifficulty(difficulty);
-      return Math.max(.09, .95 / settings.bulletDensity);
+      const floor = .09 * Math.min(1, LEGACY_MAX_DIFFICULTY.bulletDensity / settings.bulletDensity);
+      return Math.max(floor, .95 / settings.bulletDensity);
     }
 
     function bulletSpeedForDifficulty(difficulty = DEFAULT_DIFFICULTY, randomFn = Math.random, baseSpeed = 169) {
@@ -2244,7 +2250,7 @@
     }
 
     globalThis.SpaceDecisionCore = Object.freeze({
-      ENGINE_VERSION, DT_MS, ACTION_IDS, FIRE_IDS, BOMB_IDS, MISSILE, BOMB, WEAPON, PICKUP, PICKUP_KINDS, EXTRA_LIFE, WINGMAN, BOSS, ENEMY_MISSILE, LEASE_TICKS, LEASE_MS, RULES, DEFAULT_DIFFICULTY, HARDEST_DIFFICULTY,
+      ENGINE_VERSION, DT_MS, ACTION_IDS, FIRE_IDS, BOMB_IDS, MISSILE, BOMB, WEAPON, PICKUP, PICKUP_KINDS, EXTRA_LIFE, WINGMAN, BOSS, ENEMY_MISSILE, LEASE_TICKS, LEASE_MS, RULES, DEFAULT_DIFFICULTY, HARDEST_DIFFICULTY, LEGACY_MAX_DIFFICULTY, MAX_DIFFICULTY,
       createGame, stepGame, coordinateAction, stepPolicyTick, observeGame, serializeGame, restoreGame, hashGame, gameStatus,
       normalizeDifficulty, arenaFor, velocityFor, waveProfile, baseEnemyCountForWave, enemyCountForWave,
       fireIntervalForDifficulty, bulletSpeedForDifficulty, rulesManifest, missileCap, bonusMissileCap,
@@ -2778,7 +2784,7 @@
     // difficulty_changed event (source auto_ramp) plus a checkpoint in the trace, so replays stay deterministic.
     const AUTO_RAMP = Object.freeze({ every_waves:10, step:.1 });
     const THREAT_SLIDERS = Object.freeze({
-      bulletDensity:{ min:1, max:8, step:.25 },
+      bulletDensity:{ min:1, max:8, step:.25 },  // the ramp tops out at the old 4/4; v2 sliders go to 2x by hand
       enemyDensity:{ min:1, max:6, step:.25 },
       fastBulletRatio:{ min:0, max:1, step:.05 },
       fastBulletSpeed:{ min:1.1, max:4.8, step:.1 },
