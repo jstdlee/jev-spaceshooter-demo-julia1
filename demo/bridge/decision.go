@@ -480,11 +480,12 @@ func futureRow(value any, name string) (*FutureRow, error) {
 	return &FutureRow{Survival: survival, Clear: clear, Futures: futures}, nil
 }
 
-// stationScore is the lab policy's position preference: away from the side walls (saturating at 200 px) and close
-// to the station's height. Higher is better.
+// stationScore is the position preference: close to the station centre, linearly in both axes. Higher is better.
+// The lab policy's side term saturated 200 px from the walls, and that flat middle let "keeps course" walk the ship
+// across the arena with every step in the top tier, until it left the station where the way back was already
+// DOOMED (v2 run C5, seed 7). A linear pull demotes the drift at its first steps.
 func stationScore(x, y float64) float64 {
-	side := math.Min(math.Min(x, 2*ArenaCenterX-x), 200) / 200
-	return side - math.Abs(y-stationCenterY)/(2*ArenaCenterY)
+	return -math.Abs(x-stationCenterX)/stationCenterX - math.Abs(y-stationCenterY)/(2*ArenaCenterY)
 }
 
 // positionTolerance: safest moves within this much of the best station score stay in the top tier.

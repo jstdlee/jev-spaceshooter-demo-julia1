@@ -12,3 +12,4 @@ C2	offline replay 800 logged states: label rewrites (julia-1, path only)	-	-	-	-
 C3	julia-1 via bridge, v2 labels with hit-count wording	max2x	1-8	60	44.3	14.2	3/8	17	best-tier 94.3% but momentum drift: "keeps course" walks the ship along the band, out of the station, to the walls
 B2	label-oracle via bridge, hit-count wording + station core	max2x	1-8	60	60.0	60	8/8	0	position ranks before momentum
 C4	julia-1, hit-count wording + station core	max2x	1-8	60	42.6	15.4	3/8	16	best-tier 93.9%; still drifts (now left/top): within-tier words decide position
+C5	julia-1, position in the tier (relative, flat-middle station score)	max2x	1-8	60	53.6	18.2	6/8	11	best-tier 94.8%; seed 7 still drifts: flat middle lets keeps course walk across
