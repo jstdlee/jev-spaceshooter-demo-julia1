@@ -68,9 +68,6 @@ const (
 	stationMinX, stationMaxX = 200.0, 760.0
 	stationMinY, stationMaxY = 430.0, 620.0
 	stationCenterX, stationCenterY = 480.0, 530.0
-	// Inside the station, GOOD also needs the move to end in its central core or head toward the centre;
-	// otherwise "keeps course" carried the ship along the band and out of it (seed 6, v2 run 2).
-	stationCoreMinX, stationCoreMaxX = 320.0, 640.0
 	zoneProgressPx     = 10
 	pathInstructions   = "Pick the move that keeps the ship alive. Each move starts with its tier number: 1 is best, 6 is worst. Always pick a move with the lowest tier number present. Within that tier prefer more escapes, then keeps course, then not near enemy, then open space, then toward center. If every move is tier 6, pick the one hit latest."
 	fireInstructions   = "Choose shoot if enemy_count>0, otherwise cease. Shoot also launches homing missiles."
@@ -295,6 +292,8 @@ type PathRow struct {
 	WallRoom        float64
 	CenterProgress  float64
 	EndX            float64 // v2: where the move leaves the ship (sampled futures), for the station core
+	EndY            float64
+	PositionBehind  bool // v2: a safest move whose end position is clearly worse than the best safest move's
 	Crowd           int64
 	MoveCollisionMs *float64
 	EscapeOptions   int64
@@ -403,7 +402,7 @@ func pathTable(value any, player *packedPlayer, currentMovement string) ([]PathR
 			return nil, err
 		}
 		zoneStart, zoneEnd := zoneOutside(player.x, player.y), zoneOutside(*endX, *endY)
-		endXFuture := *endX
+		endXFuture, endYFuture := *endX, *endY
 		centerProgress := centerDistance - math.Hypot(*endX-ArenaCenterX, *endY-ArenaCenterY)
 		if futures != nil {
 			fx, fy := *endX, *endY
@@ -416,12 +415,13 @@ func pathTable(value any, player *packedPlayer, currentMovement string) ([]PathR
 				}
 			}
 			zoneStart, zoneEnd = stationOutside(player.x, player.y), stationOutside(fx, fy)
-			endXFuture = fx
+			endXFuture, endYFuture = fx, fy
 			centerProgress = math.Hypot(player.x-stationCenterX, player.y-stationCenterY) - math.Hypot(fx-stationCenterX, fy-stationCenterY)
 		}
 		rows = append(rows, PathRow{
 			Futures:         futures,
 			EndX:            endXFuture,
+			EndY:            endYFuture,
 			PickupCollect:   collect,
 			PickupToward:    toward,
 			Path:            movement + "__" + LivePathLease,
@@ -446,6 +446,7 @@ func pathTable(value any, player *packedPlayer, currentMovement string) ([]PathR
 	for i := range rows {
 		rows[i].PickupWanted = wanted
 	}
+	markPositionBehind(rows)
 	return rows, nil
 }
 
@@ -479,6 +480,42 @@ func futureRow(value any, name string) (*FutureRow, error) {
 	return &FutureRow{Survival: survival, Clear: clear, Futures: futures}, nil
 }
 
+// stationScore is the lab policy's position preference: away from the side walls (saturating at 200 px) and close
+// to the station's height. Higher is better.
+func stationScore(x, y float64) float64 {
+	side := math.Min(math.Min(x, 2*ArenaCenterX-x), 200) / 200
+	return side - math.Abs(y-stationCenterY)/(2*ArenaCenterY)
+}
+
+// positionTolerance: safest moves within this much of the best station score stay in the top tier.
+const positionTolerance = 0.05
+
+// markPositionBehind makes position part of the tier, the one signal Julia follows reliably: among the moves with
+// the highest sampled survival, those whose end position is clearly worse than the best one drop a tier. Within-tier
+// words alone did not hold the station: Julia's word preferences walked the ship to the walls (v2 runs C3, C4).
+func markPositionBehind(rows []PathRow) {
+	best := -1.0
+	for _, row := range rows {
+		if row.Futures != nil && row.Futures.Survival > best {
+			best = row.Futures.Survival
+		}
+	}
+	if best <= 0 {
+		return
+	}
+	top := math.Inf(-1)
+	for _, row := range rows {
+		if row.Futures.Survival >= best-1e-9 {
+			top = math.Max(top, stationScore(row.EndX, row.EndY))
+		}
+	}
+	for i := range rows {
+		if rows[i].Futures.Survival >= best-1e-9 && stationScore(rows[i].EndX, rows[i].EndY) < top-positionTolerance {
+			rows[i].PositionBehind = true
+		}
+	}
+}
+
 // futureTier is the v2 tier: the share of sampled futures a move survives, then the station preference. A safe
 // move that ends near a side wall or outside the station without heading back drops one tier, never below RISKY.
 func futureTier(row PathRow) string {
@@ -499,8 +536,8 @@ func futureTier(row PathRow) string {
 	}
 	if row.WallRoom < nearWallRoomPx || (row.ZoneEndOut > 0 && !row.zoneReturning()) {
 		tier = shiftTier(tier, 1)
-	} else if tier == "GOOD" && row.ZoneEndOut == 0 && (row.EndX < stationCoreMinX || row.EndX > stationCoreMaxX) && row.CenterProgress <= centerProgressPx {
-		tier = "OK"
+	} else if row.PositionBehind {
+		tier = shiftTier(tier, 1)
 	}
 	return tier
 }

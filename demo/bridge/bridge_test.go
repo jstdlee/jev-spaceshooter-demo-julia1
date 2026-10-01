@@ -1140,16 +1140,6 @@ func TestFutureTiersLabelsAndOracle(t *testing.T) {
 			t.Errorf("%s: label %q, want %q", tc.name, got, tc.label)
 		}
 	}
-	// In the station but outside its core, GOOD needs progress toward the centre.
-	edge := row(1, 4, 600, 530, 700, 530)
-	edge.EndX = 700
-	if got := pathTier(edge); got != "OK" {
-		t.Errorf("drifting out along the station: tier %s, want OK", got)
-	}
-	edge.CenterProgress = 30
-	if got := pathTier(edge); got != "GOOD" {
-		t.Errorf("heading back to the centre from the station edge: tier %s, want GOOD", got)
-	}
 	// The oracle ranks by tier, then futures survived.
 	criteria := map[string]any{
 		"a": pathLabel(row(0.95, 3, 480, 530, 470, 530)),
@@ -1158,5 +1148,22 @@ func TestFutureTiersLabelsAndOracle(t *testing.T) {
 	}
 	if got := oracleChoice(criteria, []string{"a", "b", "c"}); got != "b" {
 		t.Errorf("oracle picked %s, want b", got)
+	}
+}
+
+func TestPositionBehindDropsATier(t *testing.T) {
+	mk := func(survival, x, y float64) PathRow {
+		return PathRow{WallRoom: 200, EndX: x, EndY: y, Futures: &FutureRow{Survival: survival, Clear: 4, Futures: 4}}
+	}
+	rows := []PathRow{mk(1, 480, 530), mk(1, 470, 520), mk(1, 300, 400), mk(0.9, 480, 530)}
+	markPositionBehind(rows)
+	want := []bool{false, false, true, false}
+	for i, w := range want {
+		if rows[i].PositionBehind != w {
+			t.Errorf("row %d: PositionBehind %v, want %v", i, rows[i].PositionBehind, w)
+		}
+	}
+	if got := pathTier(rows[2]); got != "OK" {
+		t.Errorf("a safest move with a worse position: tier %s, want OK", got)
 	}
 }
